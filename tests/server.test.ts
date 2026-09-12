@@ -249,6 +249,19 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
           env,
         );
         assert.equal(upload.status, 201);
+        const gltfJson = JSON.stringify({asset:{version:'2.0'},scenes:[{}],scene:0});
+        const jsonChunk = Buffer.from(gltfJson.padEnd(Math.ceil(gltfJson.length/4)*4,' '));
+        const glb = Buffer.alloc(20+jsonChunk.length);glb.write('glTF');glb.writeUInt32LE(2,4);glb.writeUInt32LE(glb.length,8);glb.writeUInt32LE(jsonChunk.length,12);glb.writeUInt32LE(0x4e4f534a,16);jsonChunk.copy(glb,20);
+        for (const mimeType of ['', 'application/octet-stream']) {
+          const body=new FormData();body.set('file',new File([glb],'browser-model.GLB',{type:mimeType}));
+          const result=await app.request(`https://studio.example/api/projects/${project.id}/assets`,{method:'POST',headers:{Cookie:alice,Origin:'https://studio.example'},body},env);
+          assert.equal(result.status,201);const model=(await result.json() as any).asset;
+          assert.equal(model.mimeType,'model/gltf-binary');assert.equal(model.type,'model');
+          assert.deepEqual(Buffer.from(await (await request(model.url,'GET',undefined,alice)).arrayBuffer()),glb);
+        }
+        const invalidModel=new FormData();invalidModel.set('file',new File(['not a GLB'],'fake.glb',{type:'application/octet-stream'}));
+        const invalidUpload=await app.request(`https://studio.example/api/projects/${project.id}/assets`,{method:'POST',headers:{Cookie:alice,Origin:'https://studio.example'},body:invalidModel},env);
+        assert.equal(invalidUpload.status,400);assert.equal((await invalidUpload.json() as any).error.code,'invalid_media');
         const asset = ((await upload.json()) as any).asset;
         assert.equal((await request(asset.url)).status, 401);
         assert.equal(

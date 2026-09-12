@@ -61,7 +61,7 @@ export function SceneView({ page, theme, selected, onSelect, doc, pageIndex = 0,
         const built = await buildScene(handlers.current.renderDocument, pageIndex, handlers.current.time);
         if (disposed) { disposeScene(built.scene); return; }
         scene = built.scene; const { camera, objects, target } = built;
-        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !page.scene?.rendering?.bloom });
         renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; element.appendChild(renderer.domElement);
         orbit = new OrbitControls(camera, renderer.domElement); orbit.target.copy(target); orbit.enableDamping = true; orbit.enabled = !editing || mode === 'object';
         let needsRender = true;

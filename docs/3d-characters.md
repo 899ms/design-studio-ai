@@ -2,6 +2,8 @@
 
 Use **Character authoring** in a 3D project's editor. It shares the [scene command validator](../src/shared/scene-authoring-schema.ts) and atomic document operations with REST, MCP, CLI and WebMCP. Camera coordinates, landmarks and IK targets use scene/mesh-local units; rotations use degrees. Save revisions remain separate from schema versions.
 
+GLB uploads also accept an empty or generic browser MIME type when the filename ends in `.glb`; the server still checks the GLB signature before storing the asset. Preview and export canvases with bloom use straight alpha so faint glow remains translucent against the page background; ordinary rendering retains premultiplied alpha.
+
 ## Workflow
 
 1. Build an unrigged shape from sphere primitives. Preview a bounded smooth-union remesh, then apply; original primitives remain hidden for recovery. Remesh accepts unparented document primitives or triangle meshes with positive scale, using fast ellipsoid fields or a triangle BVH (up to 20,000 document-mesh source triangles in total). Triangle inputs should be closed; open surfaces have ambiguous interior. Imported asset nodes need editable document geometry first. Resolution controls sampling, not a guaranteed polygon count. X symmetry reflects sources around the origin. For controlled joint topology, build a loft from ordered center/radius rings; its rings form triangulated quad strips. Relax before binding.
