@@ -51,7 +51,9 @@ export function createSceneRenderer(renderer:T.WebGLRenderer,scene:T.Scene,camer
     composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));composer.addPass(new UnrealBloomPass(new T.Vector2(1,1),config.bloom,.5,config.bloomThreshold??1));
     // Bloom's intermediate passes are opaque. Restore layer transparency while
     // retaining the glow, so a later 3D segment cannot black out earlier 2D art.
-    composer.addPass(new ShaderPass({uniforms:{tDiffuse:{value:null},base:{value:base.texture}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform sampler2D tDiffuse; uniform sampler2D base; varying vec2 vUv; void main(){vec4 original=texture2D(base,vUv);vec3 combined=texture2D(tDiffuse,vUv).rgb;vec3 glow=max(combined-original.rgb,vec3(0.0));float alpha=max(original.a,clamp(max(glow.r,max(glow.g,glow.b)),0.0,1.0));gl_FragColor=vec4(combined/max(alpha,0.0001),alpha);}'}));
+    const alphaPass=new ShaderPass({uniforms:{tDiffuse:{value:null},base:{value:null}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform sampler2D tDiffuse; uniform sampler2D base; varying vec2 vUv; void main(){vec4 original=texture2D(base,vUv);vec3 combined=texture2D(tDiffuse,vUv).rgb;vec3 glow=max(combined-original.rgb,vec3(0.0));float alpha=max(original.a,clamp(max(glow.r,max(glow.g,glow.b)),0.0,1.0));gl_FragColor=vec4(combined/max(alpha,0.0001),alpha);}'});
+    // ShaderPass clones uniform definitions and drops render-target textures.
+    alphaPass.uniforms.base.value=base.texture;composer.addPass(alphaPass);
     composer.addPass(new OutputPass());
   }
   return {draw:()=>{

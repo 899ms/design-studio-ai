@@ -44,12 +44,13 @@ test('real scene effects preserve background layers in preview, PNG and decoded 
       const particles = await capture(particleDoc), movedParticles = await capture(particleDoc, .5), soughtParticles = await capture(particleDoc);
       const combined = structuredClone(glowDoc); combined.pages[0].scene!.lights = litDoc.pages[0].scene!.lights; combined.pages[0].scene!.atmosphere = fogDoc.pages[0].scene!.atmosphere; combined.pages[0].scene!.emitters = particleDoc.pages[0].scene!.emitters; combined.pages[0].scene!.rendering!.environmentIntensity = 2;
       const combinedPng = await capture(combined); (globalThis as any).effectsDocument = combined; (globalThis as any).effectsPngPixels = combinedPng.pixels;
-      return { light: changed(base.pixels, lit.pixels), fog: changed(base.pixels, fog.pixels), environment: changed(base.pixels, environment.pixels), bloom: changed(noBloom.pixels, bloom.pixels), particles: changed(base.pixels, particles.pixels), motion: changed(particles.pixels, movedParticles.pixels), seek: changed(particles.pixels, soughtParticles.pixels), baseCorner: corner(base.pixels), transparentBloomCorner: corner(transparentBloom.pixels), combinedCorner: corner(combinedPng.pixels), pngLength: combinedPng.png.length };
+      return { light: changed(base.pixels, lit.pixels), fog: changed(base.pixels, fog.pixels), environment: changed(base.pixels, environment.pixels), bloom: changed(noBloom.pixels, bloom.pixels), particles: changed(base.pixels, particles.pixels), motion: changed(particles.pixels, movedParticles.pixels), seek: changed(particles.pixels, soughtParticles.pixels), baseCenter: [...base.pixels.slice((60*160+80)*4,(60*160+80)*4+3)], bloomCenter: [...transparentBloom.pixels.slice((60*160+80)*4,(60*160+80)*4+3)], baseCorner: corner(base.pixels), transparentBloomCorner: corner(transparentBloom.pixels), combinedCorner: corner(combinedPng.pixels), pngLength: combinedPng.png.length };
     }, doc);
     for (const effect of ['light', 'fog', 'environment', 'bloom', 'particles', 'motion'] as const) assert.ok(effects[effect] > 30, `${effect}: ${JSON.stringify(effects)}`);
     assert.equal(effects.seek, 0, 'Seeking back must produce the same seeded particles');
     assert.deepEqual(effects.baseCorner, [112, 16, 32, 255]);
     assert.deepEqual(effects.transparentBloomCorner, [112, 16, 32, 255], 'Bloom must keep the red layer where there is no glow');
+    assert.ok(effects.baseCenter.every((value,index)=>Math.abs(value-effects.bloomCenter[index])<=3), 'Bloom below threshold must preserve opaque surface shading: '+JSON.stringify({base:effects.baseCenter,bloom:effects.bloomCenter}));
     assert.ok(effects.pngLength > 1000);
     await page.evaluate(() => (globalThis as any).mountEffectsPreview((globalThis as any).effectsPreviewDocument));
     await expect(page.locator('#effects-preview [data-scene-layer="3d"]')).toBeVisible();
