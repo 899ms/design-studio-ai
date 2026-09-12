@@ -17,7 +17,7 @@ test('real scene effects preserve background layers in preview, PNG and decoded 
   doc.timeline = { duration: .6, fps: 10, tracks: [] };
   const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] });
   try {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } }); await page.setContent('<html><body></body></html>');
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1.5 }); await page.setContent('<html><body></body></html>');
     await page.addStyleTag({ content: await readFile('src/styles.css', 'utf8') });
     await page.addScriptTag({ content: 'globalThis.__name = fn => fn;' });
     await page.addScriptTag({ content: bundle.outputFiles[0].text }); await page.addScriptTag({ content: await readFile('public/studio-renderer.js', 'utf8') });
@@ -38,6 +38,7 @@ test('real scene effects preserve background layers in preview, PNG and decoded 
       glowDoc.pages[0].nodes[1].scene!.material = { ...glowDoc.pages[0].nodes[1].scene!.material, emissive: '#ffffff', emissiveIntensity: 3 };
       const noBloom = await capture(glowDoc); glowDoc.pages[0].scene!.rendering = { exposure: 1, bloom: 1, bloomThreshold: .3 };
       const bloom = await capture(glowDoc), particleDoc = structuredClone(input);
+      (globalThis as any).glowPreviewDocument = glowDoc;
       const transparentDoc = structuredClone(input); transparentDoc.pages[0].scene!.rendering = { exposure: 1, bloom: 1, bloomThreshold: 10 };
       const transparentBloom = await capture(transparentDoc); (globalThis as any).effectsPreviewDocument = transparentDoc; (globalThis as any).effectsPreviewPixels = transparentBloom.pixels;
       particleDoc.pages[0].scene!.emitters = [{ id: 'particles', position: [-1, 0, 1], spread: [3, 1, 1], velocity: [1, .2, 0], count: 250, size: .06, color: '#00ffff', lifetime: 2, seed: 7, start: 0, end: 2 }];
@@ -69,6 +70,31 @@ test('real scene effects preserve background layers in preview, PNG and decoded 
     });
     assert.ok(preview.corner[0] >= 100 && preview.corner[1] < 80 && preview.corner[2] < 100, `Preview obscured the red underlay: ${preview.corner}`);
     assert.ok(preview.meanError < 2.5, `Preview differs from PNG by ${preview.meanError} channel levels`);
+    await page.evaluate(() => {
+      const doc=structuredClone((globalThis as any).glowPreviewDocument);doc.pages[0].background='#111820';
+      doc.pages[0].width=1080;doc.pages[0].height=1920;
+      doc.pages[0].nodes=doc.pages[0].nodes.filter((node:any)=>node.type==='model3d');
+      Object.assign(doc.pages[0].nodes[0],{data:{geometry:'box'},scene:{position:[0,-1.28,0],scale:[60,.01,60],material:{color:'#ff7830',emissive:'#ff1601',emissiveIntensity:5}}});
+      doc.pages[0].scene.camera={position:[10.4,7.2,24.3],target:[0,2.5,-.5],fov:39};
+      doc.pages[0].scene.rendering={exposure:1.25,bloom:.35,bloomThreshold:1.1};
+      (globalThis as any).mountEffectsPreview(doc);
+      Object.assign(document.querySelector<HTMLElement>('#effects-preview')!.style,{width:'340px',height:'640px'});
+    });
+    await expect(page.locator('#effects-preview [data-scene-layer="3d"]')).toBeVisible();
+    const visibleBloom = await page.locator('#effects-preview [data-scene-frame]').screenshot();
+    const screenBloom = await page.evaluate(async encoded => {
+      const host = document.querySelector<HTMLElement>('#effects-preview .scene-view')!;
+      const image = new Image(); image.src = `data:image/png;base64,${encoded}`; await image.decode();
+      const expected = await (globalThis as any).effectsCapture.rasterizeExportPage(host, image.width, image.height);
+      const actual = document.createElement('canvas'); actual.width=image.width;actual.height=image.height;
+      actual.getContext('2d')!.drawImage(image,0,0);
+      const a=actual.getContext('2d')!.getImageData(0,0,image.width,image.height).data,b=expected.getContext('2d').getImageData(0,0,image.width,image.height).data;
+      let difference=0;for(let i=0;i<a.length;i++)difference+=Math.abs(a[i]-b[i]);
+      const top=[...actual.getContext('2d')!.getImageData(Math.floor(image.width/2),2,1,1).data];
+      (globalThis as any).unmountEffectsPreview();return {meanError:difference/a.length,top};
+    }, visibleBloom.toString('base64'));
+    assert.ok(screenBloom.meanError < 2.5, `Visible bloom differs from its raster export by ${screenBloom.meanError} channel levels`);
+    assert.ok(screenBloom.top[0]<100, `Faint bloom must not replace the dark sky with saturated red: ${screenBloom.top}`);
     const video = await page.evaluate(async () => {
       const base64 = await (globalThis as any).studioRenderer.video((globalThis as any).effectsDocument, 0, 'webm');
       const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0)), blob = new Blob([bytes], { type: 'video/webm' }), url = URL.createObjectURL(blob), video = document.createElement('video');

@@ -147,6 +147,10 @@ export async function storeAsset(
   await projectRow(c, projectId);
   if (data.byteLength > 20 * 1024 * 1024)
     fail(413, "asset_too_large", "Assets must be at most 20 MB.");
+  // Some browsers supply an empty or generic MIME type for local GLB files.
+  // The file signature below still validates the inferred media type.
+  if ((!mimeType || mimeType === 'application/octet-stream') && /\.glb$/i.test(name))
+    mimeType = 'model/gltf-binary';
   const allowed = [
     "image/png",
     "image/jpeg",
