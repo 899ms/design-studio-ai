@@ -103,7 +103,7 @@ Cloud binary rendering embeds owned assets and blocks external browser requests:
 
 SVG cannot preserve an interactive WebGL scene as editable geometry. Raster/PDF/video render real WebGL content. Format support does not imply every node remains natively editable in every output.
 
-Cloud motion composition preserves layer order and mixes imported audio/video tracks. The browser fallback records silent motion. Camera and light properties, object transforms, materials, mesh/UV data and skinning are serialized scene state; preview playback never writes animated poses into the stored bind pose.
+Motion composition preserves layer order; editor/viewer playback and browser/cloud recording share the [timeline audio engine](../src/shared/timeline-audio.ts) for cue start/end, source offset, gain, mute and loops. Camera and light properties, fog/bloom/emitters, object transforms, materials, mesh/UV data, imported clip placements and skinning are serialized scene state; preview playback never writes animated poses into the stored bind pose. The [3D guide](3d-characters.md) owns editable conversion limits, retained source assets, sampled framing and multi-time review exports.
 
 ## Activity and instrumentation boundaries
 

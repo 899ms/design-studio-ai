@@ -167,7 +167,7 @@ test('API playground sends authenticated real GET and POST requests and displays
     await expect(playground.locator('pre').last()).toContainText('$DESIGN_STUDIO_API_KEY');
     await playground.getByRole('textbox', { name: 'Query parameters' }).fill('q=Inter&version=1');
     await expect(playground.locator('pre').last()).toContainText('?q=Inter&version=1');
-    await playground.getByRole('combobox', { name: 'Endpoint', exact: true }).selectOption({ label: 'POST /api/projects/{id}/assets — Upload a file (WebMCP converts base64 to multipart)' });
+    await playground.getByRole('combobox', { name: 'Endpoint', exact: true }).selectOption({ label: 'POST /api/projects/{id}/assets — Upload library-only; insert separately (WebMCP base64 → multipart)' });
     await expect(playground.locator('pre').last()).toContainText("-F 'file=@/path/to/asset'");
     await expect(playground.locator('pre').last()).not.toContainText('application/json');
     await playground.getByRole('textbox', { name: 'Query parameters' }).fill('');

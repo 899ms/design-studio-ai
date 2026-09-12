@@ -10,7 +10,7 @@ The document `timeline` contains `duration`, `fps`, and tracks with an actual `n
 
 Use implemented animated values: `x`, `y`, `width`, `height`, `rotation`, `opacity`, and supported style values such as `fontSize`. Scene transforms use keys such as `scene.rotation.y`; bone transforms use keys such as `scene.bones.0.rotation.z`. Numeric values interpolate; strings such as colors hold between keyed values rather than smoothly blend. Do not assume every accepted key is animated or that arbitrary CSS/video-editing properties work.
 
-Use asset-backed `video` and `audio` nodes for imported media. Uploading an asset does not place it in the document. Inspect media and timeline controls for real behavior; do not invent trim, subtitle, compositing, or transition fields absent from the implementation.
+Use asset-backed `video` and `audio` nodes for imported media. Uploading only adds to the library; insert the node explicitly. Timeline waveform, trim, gain, mute, loop and event controls persist in node `data` as `audioStart`, `audioEnd`, `audioOffset` (seconds), `audioGain` (0–4), `audioMuted`, `audioLoop` and `audioEvent` (a label, not synthesized sound). Read the live schema before writing; preserve existing nested data. Shared `replace-asset` updates references while retaining placements/timing, so inspect the replacement's duration. Do not invent subtitle or transition fields absent from the implementation.
 
 ## Layout and taste
 
@@ -22,4 +22,4 @@ Preserve typography, brand, and approved words. Review text at the actual delive
 
 Play the whole timeline, then inspect the first/last frames and movement extremes. Check overshoot, clipping, text overflow, layer order, unintended blank frames, long-word fitting, caption dwell time, and the exact point of audio/video changes. Review with sound and without sound where comprehension matters. Design preflight inspects static geometry, not all animated positions.
 
-The schema can store longer timelines, but cloud motion export is limited to 60 seconds. Split into shorter deliverables only within the agreed scope. MP4 requires an available encoder; WebM is another output choice. Cloud recording mixes imported audio/video while the browser fallback is silent. Verify the actual exported duration, dimensions, playback, and audible tracks. Static PNG/SVG frames and successful queued provider jobs do not establish completed video delivery.
+The schema can store longer timelines, but cloud motion export is limited to 60 seconds. Split into shorter deliverables only within the agreed scope. MP4 requires an available encoder; WebM is another output choice. Editor/viewer playback and browser/cloud recording share audio cue timing and mixing; enable audio if browser autoplay is blocked. Verify the actual exported duration, dimensions, playback, and audible tracks. Static PNG/SVG frames and successful queued provider jobs do not establish completed video delivery.

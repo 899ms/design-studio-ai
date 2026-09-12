@@ -1,4 +1,5 @@
 import {operationJobSchema} from '../shared/operation-jobs';
+import {browserSceneTools} from './browser-scene-tools';
 import { visualInspectionSchema, workspaceInspectionSchema } from '../shared/visual-inspection';
 import { visualInspectionTools } from './browser-visual-inspection-tools';
 export { registerCommunityBrowserTools } from './browser-community-tools';
@@ -44,8 +45,8 @@ export function registerDesignTools(context: Context, get: () => DesignDocument,
   // Only first-party documented endpoints are callable; the browser supplies its own session.
   for (const endpoint of apiEndpoints.filter(e => !e.path.endsWith('/inspect') && !e.path.startsWith('/api/community') && !e.path.endsWith('/client-events') && !e.path.includes('/auth/') && !e.path.includes('/tokens') && (!e.path.includes('/providers') || e.method === 'GET'))) {
     const operation = `${endpoint.method.toLowerCase()}_${endpoint.path.replace(/^\/api\//, '').replace(/\{(\w+)\}/g, '$1').replace(/[^a-z0-9]/gi, '_')}`;
-    tools.push({ name: `studio_api_${operation}`, description: endpoint.summary + '. Saved state; writes require observed revisions.' + (/\/(publish|preview|share)$/.test(endpoint.path)?' Creates or manages public snapshots.':''),
-      annotations: { readOnlyHint: endpoint.method === 'GET' },
+    tools.push({ name: `studio_api_${operation}`, description: endpoint.summary + (endpoint.method==='GET'?'. Saved state.':'. Writes require observed revisions.') + (/\/(publish|preview|share)$/.test(endpoint.path)?' Creates or manages public snapshots.':''),
+      ...(endpoint.method==='GET'?{annotations:{readOnlyHint:true}}:{}),
       inputSchema: { type: 'object', properties: { parameters: { type: 'object', additionalProperties: { type: 'string' } }, query: { type: 'object', additionalProperties: { type: 'string' } }, ...(endpoint.body ? { body: endpoint.method==='PUT'&&endpoint.path.endsWith('/document')?z.toJSONSchema(documentWriteSchema.extend({ document: z.object({}).loose().describe('Canonical DesignDocument. Discover the full document schema with studio_capabilities before writing.') })):endpoint.path.endsWith('/operations') ? {type:'object',properties:{kind:{type:'string',enum:['save','export']},operationId:{type:'string'},input:{type:'object',description:'Discover canonical operationJob in studio_capabilities.'}},required:['kind','operationId','input']} : endpoint.path.endsWith('/paint') ? z.toJSONSchema(paintingCommandSchema) : endpoint.path.endsWith('/export') ? z.toJSONSchema(exportOptionsSchema) : endpoint.path.endsWith('/media') ? z.toJSONSchema(mediaInputSchema) : endpoint.path.endsWith('/generate') ? z.toJSONSchema(generationInputSchema) : endpoint.path.endsWith('/brief/interview') ? z.toJSONSchema(providerInterviewSchema) : { type: 'object' } } : {}) }, ...(endpoint.body ? { required: ['body'] } : {}) },
       execute: async args => {
         const parameters = args.parameters as Record<string, string> | undefined;
@@ -63,6 +64,7 @@ export function registerDesignTools(context: Context, get: () => DesignDocument,
       },
     });
   }
+  tools.push(...browserSceneTools(get,set));
   for (const tool of tools) context.registerTool(tool);
   return () => tools.forEach(tool => context.unregisterTool?.(tool.name));
 }

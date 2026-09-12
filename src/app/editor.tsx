@@ -1,4 +1,7 @@
 import {OperationStatus} from './operation-status';
+import {AssetReplacement} from './asset-replacement';
+import {TimelineAudioPlayer} from './timeline-audio-player';
+import {timelineAudioCues} from '../shared/timeline-audio';
 import { CommunityPublishDialog } from './community-publish-dialog';
 import { useCommunityEnabled } from './community-client';
 import type {OperationJob} from '../shared/operation-jobs';
@@ -644,7 +647,7 @@ export function Editor({
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   useEffect(() => {
-    if (!playing || !doc.timeline) return;
+    if (!playing || !doc.timeline || timelineAudioCues(page.nodes,doc.timeline.duration).length) return;
     let frame = 0;
     const start = performance.now() - time * 1000;
     const tick = () => {
@@ -659,7 +662,7 @@ export function Editor({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, doc.timeline?.duration]);
+  }, [playing, doc.timeline?.duration,page.nodes]);
   function removeNode() {
     void trackClient({ event: 'editor_action', action: 'delete', page: 'editor', projectId: initial.id });
     const roots = selectedRoots(docRef.current.pages[pageIndex], selection);
@@ -1002,8 +1005,8 @@ export function Editor({
         `/api/projects/${project.id}/assets`,
         { method: "POST", body },
       );
-      await addAsset(asset);
-      notify("Asset imported. Save to keep its placement.");
+      change(d=>{if(!d.assets.some(a=>a.id===asset.id))d.assets.push(asset);});
+      notify("Asset added to the library. Select it to insert into the scene.");
     } catch (e) {
       setError(message(e));
     } finally {
@@ -1129,7 +1132,7 @@ export function Editor({
         }
         if (format === "google") setGoogleUrl(await googleSlides(project.id));
         else {
-          const request=operationJobSchema.parse({kind:'export',operationId:crypto.randomUUID(),input:{format,pageIndex,expectedRevision:revision,...(['png-sequence','spritesheet'].includes(format)?{start:frameStart,end:frameEnd,fps:frameFps}:{})}});
+          const request=operationJobSchema.parse({kind:'export',operationId:crypto.randomUUID(),input:{format,pageIndex,expectedRevision:revision,...(['png-sequence','spritesheet'].includes(format)?{start:frameStart,end:frameEnd,fps:frameFps}:format==='scene-angles'?{start:0,...(doc.timeline?{end:doc.timeline.duration,reviewSamples:5}:{})}:{})}});
           const response=await runOperation(project.id,request,undefined);
           if (!response.ok) {
             const data = (await response.json().catch(() => null)) as {
@@ -1870,6 +1873,7 @@ export function Editor({
                   }}
                 />
               </label>
+              <AssetReplacement doc={doc} onDocument={next=>change(d=>Object.assign(d,next))}/>
               <div className="asset-grid">
                 {doc.assets.map((asset) => (
                   <button
@@ -2243,7 +2247,8 @@ export function Editor({
                           {media.type === "video" ? (
                             <video
                               src={media.src}
-                              controls
+                              controls={!doc.timeline}
+                              muted={!!doc.timeline}
                               playsInline
                               style={{
                                 width: "100%",
@@ -2254,8 +2259,9 @@ export function Editor({
                           ) : (
                             <audio
                               src={media.src}
-                              controls
-                              style={{ width: "100%" }}
+                              controls={!doc.timeline}
+                              muted={!!doc.timeline}
+                              style={{ width: "100%",display:doc.timeline?'none':undefined }}
                             />
                           )}
                         </div>
@@ -2315,6 +2321,7 @@ export function Editor({
             )}
           </div>
           <button className="button" onClick={()=>setCharacterOpen(true)}>Character Motion</button>
+          {doc.timeline && <TimelineAudioPlayer nodes={page.nodes} duration={doc.timeline.duration} time={time} playing={playing} onTime={setTime} onEnded={()=>setPlaying(false)} onSeek={value=>{setTime(value);setPlaying(false);}} onChangeNode={(id,patch)=>change(d=>{const node=d.pages[pageIndex].nodes.find(n=>n.id===id);if(node)node.data={...node.data,...patch};})}/>}
           {doc.timeline && <TimelineEditor doc={doc} time={time} seek={value => { setTime(value); setPlaying(false); }} change={change} />}
           {doc.timeline && (
             <div className="timeline">
@@ -2481,7 +2488,7 @@ export function Editor({
             <div className="export-grid">
               {[
                 ...(['web', 'wireframe'].includes(doc.kind) ? [{ id: 'react', name: 'React prototype', detail: 'Runnable source + assets' }] : []),
-                ...(page.nodes.some(n=>n.type==='model3d')?[{id:'scene-angles',name:'Four angle views',detail:'PNG ZIP around the saved camera target'}]:[]),
+                ...(page.nodes.some(n=>n.type==='model3d')?[{id:'scene-angles',name:'Review scene motion',detail:'Four angles × five times, contact sheet & diagnostics'}]:[]),
                 ...(doc.characters?.length?[{id:'motion',name:'Motion package',detail:'Native rig + portable player'},{id:'png-sequence',name:'PNG sequence ZIP',detail:'Deterministic frames + manifest'},{id:'spritesheet',name:'Spritesheet ZIP',detail:'Atlas image + frame coordinates'}]:[]),
                 ...(doc.kind === '3d' ? [{ id: 'glb', name: 'GLB model', detail: 'Scene, materials & animation' }, { id: 'gltf', name: 'glTF scene', detail: 'Portable 3D source' }] : []),
                 { id: "png", name: "PNG image", detail: "Current page" },

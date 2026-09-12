@@ -70,6 +70,12 @@ export const documentSchema = z.discriminatedUnion('schemaVersion', [legacyDocum
     total += page.nodes.length;
     for (const node of page.nodes) {
       unique(node.id); nodeIds.add(node.id);
+      if(node.type==='audio'||node.type==='video'){
+        for(const [key,max] of [['audioStart',3600],['audioEnd',3600],['audioOffset',3600],['audioGain',4]] as const){const value=node.data?.[key];if(value!==undefined&&(typeof value!=='number'||!Number.isFinite(value)||value<0||value>max))ctx.addIssue({code:'custom',message:`Invalid ${key}`});}
+        for(const key of ['audioMuted','audioLoop'])if(node.data?.[key]!==undefined&&typeof node.data[key]!=='boolean')ctx.addIssue({code:'custom',message:`Invalid ${key}`});
+        if(node.data?.audioEnd!==undefined&&Number(node.data.audioEnd)<=Number(node.data.audioStart??0))ctx.addIssue({code:'custom',message:'Audio end must follow start'});
+        if(node.data?.audioEvent!==undefined&&(typeof node.data.audioEvent!=='string'||node.data.audioEvent.length>120))ctx.addIssue({code:'custom',message:'Audio event must be a label of at most 120 characters'});
+      }
       if(node.type==='character' && !node.character) ctx.addIssue({code:'custom',message:'Character node needs instance settings'});
       if(node.character) {
         const c=characters.get(node.character.characterId);
@@ -81,7 +87,7 @@ export const documentSchema = z.discriminatedUnion('schemaVersion', [legacyDocum
       if(node.scene?.rigId){const rig=page.nodes.find(n=>n.id===node.scene!.rigId);if(node.type!=='model3d'||!node.scene.mesh?.skinIndices||!rig?.scene?.bones?.length||!rig.scene.mesh?.skinIndices||rig.scene.rigId||rig===node||node.scene.bones||(node.visible!==false&&rig.visible===false))ctx.addIssue({code:'custom',message:'Shared skinned mesh must reference a separate bound skeleton owner on this page; keep its owner visible when attachments are visible'});}
       if (node.scene?.bones) node.scene.bones.forEach((bone, index) => { if (bone.parent >= index) ctx.addIssue({ code: 'custom', message: 'Bone parents must precede their children' }); });
       if (node.scene?.mesh?.skinIndices && node.scene.mesh.skinIndices.some(i => i >= (node.scene?.bones?.length ?? page.nodes.find(n=>n.id===node.scene?.rigId)?.scene?.bones?.length ?? 0))) ctx.addIssue({ code: 'custom', message: 'Skin references an unknown bone' });
-      if (node.scene?.material?.textureAssetId && !doc.assets.some(a => a.id === node.scene!.material!.textureAssetId)) ctx.addIssue({ code: 'custom', message: 'Texture references an unknown asset' });
+      for(const key of ['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const)if(node.scene?.material?.[key]&&!doc.assets.some(a=>a.id===node.scene!.material![key]))ctx.addIssue({code:'custom',message:'Texture references an unknown asset'});
       for (const interaction of node.interactions ?? []) {
         if (interaction.action === 'navigate' && !doc.pages.some(p => p.id === interaction.target)) ctx.addIssue({ code: 'custom', message: 'Navigation target must be an existing page' });
         if (interaction.action === 'url' && !isSafeUrl(interaction.target)) ctx.addIssue({ code: 'custom', message: 'Interaction URL must be safe' });

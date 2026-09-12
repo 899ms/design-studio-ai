@@ -15,6 +15,13 @@ export function publicCreativeProjection(document: DesignDocument): DesignDocume
     keepAssets.add(asset.id); return asset;
   };
   for (const page of doc.pages) {
+    // Source checkpoints are owner-only even if their visibility is toggled later.
+    // Ordinary hidden nodes remain available to published toggle interactions.
+    const checkpoints = new Set(page.nodes.filter(n => n.data?.sceneSourceCheckpoint === true).map(n => n.id));
+    let expanded = true;
+    while (expanded) { expanded = false; for (const node of page.nodes) if (node.parentId && checkpoints.has(node.parentId) && !checkpoints.has(node.id)) { checkpoints.add(node.id); expanded = true; } }
+    page.nodes = page.nodes.filter(n => !checkpoints.has(n.id));
+    for (const node of page.nodes) if (node.interactions) node.interactions = node.interactions.filter(interaction => interaction.action !== 'toggle' || !checkpoints.has(interaction.target));
     const hidden = new Set(page.nodes.filter(n => n.visible === false).map(n => n.id));
     let changed = true;
     while (changed) { changed = false; for (const n of page.nodes) if (n.parentId && hidden.has(n.parentId) && !hidden.has(n.id)) { hidden.add(n.id); changed = true; } }

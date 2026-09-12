@@ -65,7 +65,7 @@ export function communityProjection(input: DesignDocument): { document: DesignDo
   for (const page of doc.pages) {
     if (page.notes) disclosure.removedNotes++;
     delete page.notes;
-    const hidden = hiddenIds(page.nodes);
+    const hidden = hiddenIds(page.nodes.map(node => node.data?.sceneSourceCheckpoint === true ? { ...node, visible: false } : node));
     disclosure.removedNodes += hidden.size;
     page.nodes = page.nodes.filter(n => !hidden.has(n.id));
     const visible = new Set(page.nodes.map(n => n.id));

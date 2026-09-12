@@ -4,6 +4,7 @@ import { geometryFor, meshData } from './scene-runtime';
 import * as T from 'three';
 import type { MeshData } from './design-capabilities';
 import type { DesignNode } from './schema';
+import { refreshMeshShading } from './mesh-shading';
 export function adjacency(mesh: MeshData) {
   const links = Array.from({ length: mesh.positions.length / 3 }, () => new Set<number>());
   for (let i = 0; i < mesh.indices.length; i += 3) for (let j = 0; j < 3; j++) { const a = mesh.indices[i+j], b = mesh.indices[i+(j+1)%3]; links[a].add(b); links[b].add(a); }
@@ -15,6 +16,7 @@ export function relax(mesh: MeshData, iterations: number, strength: number) {
     const old = [...mesh.positions];
     links.forEach((neighbors, i) => { if (neighbors.size) for (let axis = 0; axis < 3; axis++) mesh.positions[i*3+axis] = old[i*3+axis]*(1-strength) + [...neighbors].reduce((s,j)=>s+old[j*3+axis],0)/neighbors.size*strength; });
   }
+  if (iterations > 0 && strength !== 0) refreshMeshShading(mesh);
 }
 export function loft(rings: { center: number[]; radius: number }[], segments: number): MeshData {
   const positions: number[] = [], indices: number[] = [], uv: number[] = [];

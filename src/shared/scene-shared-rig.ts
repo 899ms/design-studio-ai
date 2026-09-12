@@ -1,4 +1,5 @@
 import {constrainPose} from './scene-constraints';
+import {applyBoneLimits} from './scene-rigging';
 import {Matrix4,Vector3,Quaternion,Euler} from 'three';
 import type { DesignDocument, DesignNode } from './schema';
 import { interpolateNode } from './render';
@@ -12,7 +13,7 @@ export function rigOwner(node: DesignNode, doc: DesignDocument): DesignNode {
 }
 export function scenePose(node: DesignNode, doc: DesignDocument, time: number): DesignNode {
   const pose = interpolateNode(node, doc, time), source = rigOwner(node, doc);
-  if (source === node) {constrainPose(pose,doc.pages.find(p=>p.nodes.some(n=>n.id===node.id))!,time);return pose;}
+  if (source === node) {constrainPose(pose,doc.pages.find(p=>p.nodes.some(n=>n.id===node.id))!,time);applyBoneLimits(pose.scene?.bones??[]);return pose;}
   return { ...pose, scene: { ...pose.scene, bones: scenePose(source, doc, time).scene?.bones } };
 }
 // JSON transport can round the final floating-point digit. Keep geometric equality
