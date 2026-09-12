@@ -4,6 +4,17 @@ import type { MeshData } from './design-capabilities';
 import type { SceneCommand } from './scene-authoring-schema';
 import { adjacency } from './scene-mesh-topology';
 type Bones = NonNullable<NonNullable<DesignNode['scene']>['bones']>;
+export function limitedRotation(bone:Bones[number],rotation:number[]):[number,number,number] {
+  return rotation.map((value,axis)=>bone.rotationLimits?Math.max(bone.rotationLimits.min[axis],Math.min(bone.rotationLimits.max[axis],value)):value) as [number,number,number];
+}
+export function applyBoneLimits(bones:Bones){for(const bone of bones)if(bone.rotationLimits)bone.rotation=limitedRotation(bone,bone.rotation??bone.bindRotation??[0,0,0]);}
+export function mirrorPose(bones:Bones,name:string){
+  const bone=bones.find(b=>b.name===name);if(!bone)throw new Error('Unknown bone');
+  const opposite=bone.mirrorBone??name.replace(/Left|Right/g,side=>side==='Left'?'Right':'Left');
+  const target=bones.find(b=>b.name===opposite);if(!target||target===bone)throw new Error('Choose a bone with a named mirror partner');
+  const source=bone.rotation??bone.bindRotation??[0,0,0],rest=bone.bindRotation??[0,0,0],targetRest=target.bindRotation??[0,0,0];
+  target.rotation=limitedRotation(target,source.map((value,axis)=>targetRest[axis]+(value-rest[axis])*(axis===0?1:-1)));
+}
 export function boneWorld(bones: Bones, rest = false) {
   const matrices:T.Matrix4[]=[];
   bones.forEach(b=>{const rotation=rest?b.bindRotation??[0,0,0]:b.rotation??b.bindRotation??[0,0,0];const m=new T.Matrix4().compose(new T.Vector3(...b.position),new T.Quaternion().setFromEuler(new T.Euler(...rotation.map(v=>v*Math.PI/180) as [number,number,number])),new T.Vector3(1,1,1));matrices.push(b.parent<0?m:matrices[b.parent].clone().multiply(m));});return matrices;
@@ -23,7 +34,10 @@ export function smoothWeights(mesh:MeshData,iterations:number){normalizeWeights(
 export function bind(mesh:MeshData,bones:Bones,smooth:number,rigidBone?:string){
   if(!bones.length)throw new Error('Create a skeleton before binding');const rigid=rigidBone===undefined?-1:bones.findIndex(b=>b.name===rigidBone);if(rigidBone!==undefined&&rigid<0)throw new Error('Unknown rigid bone');
   const world=boneWorld(bones,true).map(m=>new T.Vector3().setFromMatrixPosition(m));mesh.skinIndices=[];mesh.skinWeights=[];
-  for(let i=0;i<mesh.positions.length/3;i++){const p=new T.Vector3().fromArray(mesh.positions,i*3);const influences=bones.map((b,j)=>{const child=bones.findIndex(v=>v.parent===j);const end=child<0?world[j]:world[child];const d=new T.Line3(world[j],end).closestPointToPoint(p,true,new T.Vector3()).distanceToSquared(p);return [j,1/Math.max(.00001,d*d)] as const;}).sort((a,b)=>b[1]-a[1]).slice(0,4);const sum=influences.reduce((s,b)=>s+b[1],0);for(let j=0;j<4;j++){mesh.skinIndices.push(rigid>=0?rigid:influences[j]?.[0]??0);mesh.skinWeights.push(rigid>=0?(j===0?1:0):(influences[j]?.[1]??0)/sum);}}
+  // Branched joints need every outgoing segment. Inverse squared distance keeps
+  // membrane transitions smoother than inverse fourth-power concentration.
+  const segments=bones.map((_,j)=>{const children=bones.flatMap((bone,k)=>bone.parent===j?[k]:[]);return (children.length?children:[j]).map(k=>new T.Line3(world[j],world[k]));});
+  for(let i=0;i<mesh.positions.length/3;i++){const p=new T.Vector3().fromArray(mesh.positions,i*3);const influences=bones.map((_,j)=>{const d=Math.min(...segments[j].map(segment=>segment.closestPointToPoint(p,true,new T.Vector3()).distanceToSquared(p)));return [j,1/Math.max(.00001,d)] as const;}).sort((a,b)=>b[1]-a[1]).slice(0,4);const sum=influences.reduce((s,b)=>s+b[1],0);for(let j=0;j<4;j++){mesh.skinIndices.push(rigid>=0?rigid:influences[j]?.[0]??0);mesh.skinWeights.push(rigid>=0?(j===0?1:0):(influences[j]?.[1]??0)/sum);}}
   if(rigid<0&&smooth)smoothWeights(mesh,smooth);
 }
 export function mirrorWeights(mesh:MeshData,bones:Bones){normalizeWeights(mesh);const points=new Map<string,number>();const key=(x:number,y:number,z:number)=>[x,y,z].map(v=>Math.round(v*10000)).join(':');for(let i=0;i<mesh.positions.length/3;i++)points.set(key(...mesh.positions.slice(i*3,i*3+3) as [number,number,number]),i);const ids=[...mesh.skinIndices!],weights=[...mesh.skinWeights!];for(let i=0;i<mesh.positions.length/3;i++){const [x,y,z]=mesh.positions.slice(i*3,i*3+3);if(x<0)continue;const source=points.get(key(-x,y,z));if(source===undefined)throw new Error('Mirror requires symmetric vertex pairs; no changes applied');for(let j=0;j<4;j++){const name=bones[ids[source*4+j]].name.replace(/Left|Right/g,m=>m==='Left'?'Right':'Left');const opposite=bones.findIndex(b=>b.name===name);mesh.skinIndices![i*4+j]=opposite<0?ids[source*4+j]:opposite;mesh.skinWeights![i*4+j]=weights[source*4+j];}}}

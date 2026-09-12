@@ -36,7 +36,7 @@ test('browser registration stays compact while retaining canonical validation an
   assert.equal(schemas.operations.type, 'array');
   assert.equal(schemas.operations.minItems, 1);
   const literals = operationLiterals(schemas.operations);
-  for (const op of ['add-node', 'update-node', 'remove-node', 'add-page', 'set-theme', 'set-timeline', 'upsert-track', 'upsert-keyframe', 'rename', 'reparent-node', 'update-page', 'scene-command']) assert.ok(literals.has(op), `operations schema must publish "${op}"`);
+  for (const op of ['add-node', 'update-node', 'remove-node', 'add-page', 'set-theme', 'set-timeline', 'upsert-track', 'upsert-keyframe', 'rename', 'reparent-node', 'update-page', 'scene-command','replace-asset']) assert.ok(literals.has(op), `operations schema must publish "${op}"`);
   assert.ok(literals.size >= 20, `expected the full operation union, saw ${literals.size}`);
   assert.equal(schemas.documentWrite.type, 'object');
   assert.deepEqual([...schemas.documentWrite.required].sort(), ['document', 'expectedRevision']);
@@ -51,7 +51,17 @@ test('browser registration stays compact while retaining canonical validation an
   assert.deepEqual(document, before);
   assert.ok(tools.has('studio_api_put_projects_id_document'));
   assert.ok(tools.has('studio_api_post_projects_id_assets'));
+  assert.ok(tools.has('studio_imported_model'));
+  assert.ok(tools.has('studio_frame_scene_shot'));
   assert.ok(![...tools.keys()].some(name => name.includes('tokens') || name.includes('auth')));
   unregister();
   assert.equal(tools.size, 0);
+});
+
+test('agent shot framing previews without writes and applies a fitted square variant',async()=>{
+  let document=createDocument('3d');document.pages[0].nodes=[{id:'subject',name:'Subject',type:'model3d',x:0,y:0,width:400,height:400,scene:{position:[0,0,0],scale:[3,1,1]}}];
+  const original=JSON.stringify(document),tools=new Map<string,any>();registerDesignTools({registerTool:tool=>tools.set(tool.name,tool)},()=>document,next=>{document=next;});
+  const tool=tools.get('studio_frame_scene_shot'),input={pageId:document.pages[0].id,nodeIds:['subject'],aspect:'square',samples:3};
+  const preview=JSON.parse((await tool.execute(input)).content[0].text);assert.equal(preview.preview,true);assert.equal(JSON.stringify(document),original);
+  await tool.execute({...input,preview:false});assert.equal(document.pages.length,2);assert.equal(document.pages[1].width,1080);assert.equal(document.pages[1].height,1080);assert(document.pages[1].scene?.camera);assert.notEqual(document.pages[1].nodes[0].id,'subject');
 });

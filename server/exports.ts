@@ -23,7 +23,7 @@ import { interactiveSnapshotHtml } from './published-html';
 export interface ExportBrowser { newPage(): Promise<any>; close(): Promise<void> }
 export const exportRoutes = new Hono<Env>();
 
-const mimeTypes = {'scene-angles':'application/zip', motion:'application/zip', 'png-sequence':'application/zip', spritesheet:'application/zip', json: 'application/json', svg: 'image/svg+xml', html: 'text/html', png: 'image/png', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', webm: 'video/webm', mp4: 'video/mp4', react: 'application/zip', glb: 'model/gltf-binary', gltf: 'model/gltf+json' };
+const mimeTypes = {'editable-scene':'application/json','scene-angles':'application/zip', motion:'application/zip', 'png-sequence':'application/zip', spritesheet:'application/zip', json: 'application/json', svg: 'image/svg+xml', html: 'text/html', png: 'image/png', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', webm: 'video/webm', mp4: 'video/mp4', react: 'application/zip', glb: 'model/gltf-binary', gltf: 'model/gltf+json' };
 
 /** Fetch only generated Google Fonts CSS and its fixed-origin font files, before browser isolation. */
 export async function embeddedDocumentFonts(doc: DesignDocument) {
@@ -76,7 +76,10 @@ export async function renderProjectExport(c: Context<Env>, projectId: string, in
     span.event.projectId = row.id; span.event.action = thumbnail ? 'thumbnail.render' : `export.${options.format}`;
     await updateEvent(c.env, span.event);
     let doc = documentSchema.parse(JSON.parse(row.document));
-    if (options.format !== 'json') { doc = publicCreativeProjection(upgradeDocument(doc)); await validateAssets(c, doc, row.id); }
+    if (options.format !== 'json') {
+      if (options.format !== 'editable-scene') doc = publicCreativeProjection(upgradeDocument(doc));
+      await validateAssets(c, doc, row.id);
+    }
     return renderSnapshotExport(c.env, row.name, doc, options, async url => {
       const asset = await c.env.DB.prepare('SELECT storage_key,mime_type FROM assets WHERE id=? AND user_id=?').bind(url.split('/').pop(), owner(c)).first<{storage_key:string;mime_type:string}>();
       if (!asset) fail(400, 'missing_asset', 'A referenced asset is unavailable.');
@@ -92,6 +95,7 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
   const options=optionsSchema.parse(input), thumbnail=hooks.thumbnail ?? false;
   let doc=documentSchema.parse(structuredClone(document));
   if (!doc.pages[options.pageIndex]) fail(400, 'invalid_page', 'This page does not exist.');
+  if(options.format==='editable-scene'&&!options.nodeId)fail(400,'invalid_export','Editable scene export requires a nodeId');
   const frameEnd = options.end ?? doc.timeline?.duration ?? 2;
   if (!thumbnail && !hooks.inspection && (options.format === 'png-sequence' || options.format === 'spritesheet')) {
     const frameInput = {...doc.pages[options.pageIndex], start: options.start, end: frameEnd, fps: options.fps, format: options.format};
@@ -100,7 +104,7 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
   if (options.format === 'react' && !['web', 'wireframe'].includes(doc.kind)) fail(400, 'unsupported_export', 'React source export is available for Web/App and wireframe projects.');
   if (['glb', 'gltf'].includes(options.format) && doc.pages[options.pageIndex].nodes.some(node=>node.character)) fail(400,'unsupported_export','Character motion uses the native motion package; GLB/glTF cannot preserve 2D rigs.');
   if (['glb', 'gltf'].includes(options.format) && !doc.pages[options.pageIndex].nodes.some(node => node.type === 'model3d')) fail(400, 'unsupported_export', 'Scene export requires a 3D object on the selected page.');
-  const extension = ['react','motion','png-sequence','spritesheet','scene-angles'].includes(options.format) ? 'zip' : options.format;
+  const extension = options.format==='editable-scene'?'json':['react','motion','png-sequence','spritesheet','scene-angles'].includes(options.format) ? 'zip' : options.format;
   const headers = { 'Content-Type': mimeTypes[options.format], 'Content-Disposition': `attachment; filename="${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.${extension}"`, 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' };
   if (options.format === 'json') { const output = JSON.stringify(doc, null, 2); hooks.onBytes?.(new TextEncoder().encode(output).length); return new Response(output, { headers }); }
   if (!['html', 'svg', 'react'].includes(options.format)) {
@@ -110,7 +114,7 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
     if (renderNodes.some(node => node.width * node.height > 16777216) || totalPixels > 67108864) fail(413, 'render_budget_exceeded', 'Reduce page or object dimensions; a render may contain at most 64 megapixels in total and 16 megapixels per object.');
     const characterMedia=doc.characters?.flatMap(c=>c.attachments.flatMap(a=>[a.assetId,...(a.frames??[])])).filter(Boolean)??[];
     const characterUrls=doc.assets.filter(a=>characterMedia.includes(a.id)).map(a=>a.url);
-    const media = renderNodes.flatMap(node => [node.src, doc.assets.find(asset => asset.id === node.scene?.material?.textureAssetId)?.url]);
+    const media = renderNodes.flatMap(node => [node.src, ...(['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const).map(key=>doc.assets.find(asset=>asset.id===node.scene?.material?.[key])?.url)]);
     if ([...media,...characterUrls].some(url => url && !url.startsWith('/api/assets/') && !url.startsWith('/api/community/') && !url.startsWith('data:'))) fail(400, 'import_asset_required', 'Import external media into the project before cloud rendering. Cloud renderers have no external network access.');
   }
   let embeddedSize = 0;
@@ -188,9 +192,11 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
         ]);
         output = Buffer.from(encoded, 'base64');
       } finally { if (timeout) clearTimeout(timeout); }
+    } else if(options.format==='editable-scene'){
+      const encoded=await page.evaluate(({doc,original,index,nodeId}:any)=>(globalThis as any).studioRenderer.editableScene(doc,original,index,nodeId),{doc,original:document,index:options.pageIndex,nodeId:options.nodeId});output=Buffer.from(encoded,'base64');
     } else if(options.format==='scene-angles'){
       if(current.width*current.height*4>67108864)fail(413,'render_budget_exceeded','Four views exceed 64 megapixels');
-      const encoded=await page.evaluate(({doc,index,time}:any)=>(globalThis as any).studioRenderer.sceneAngles(doc,index,time),{doc,index:options.pageIndex,time:options.start});output=Buffer.from(encoded,'base64');
+      const encoded=await page.evaluate(({doc,index,time,end,samples}:any)=>(globalThis as any).studioRenderer.sceneAngles(doc,index,time,end,samples),{doc,index:options.pageIndex,time:options.start,end:options.end,samples:options.reviewSamples});output=Buffer.from(encoded,'base64');
     } else if(['png-sequence','spritesheet'].includes(options.format)){
       const end=frameEnd;
       const encoded=await page.evaluate(({doc,index,format,start,end,fps}:any)=>(globalThis as any).studioRenderer.motionFrames(doc,index,format,start,end,fps),{doc,index:options.pageIndex,format:options.format,start:options.start,end,fps:options.fps});output=Buffer.from(encoded,'base64');
