@@ -51,6 +51,7 @@ test('browser registration stays compact while retaining canonical validation an
   assert.deepEqual(document, before);
   assert.ok(tools.has('studio_api_put_projects_id_document'));
   assert.ok(tools.has('studio_api_post_projects_id_assets'));
+  assert.ok(tools.has('studio_api_post_design_systems_import'));
   assert.ok(tools.has('studio_imported_model'));
   assert.ok(tools.has('studio_frame_scene_shot'));
   assert.ok(![...tools.keys()].some(name => name.includes('tokens') || name.includes('auth')));
