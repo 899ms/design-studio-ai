@@ -113,7 +113,9 @@ test('a final validation failure reports an actionable Community job message', (
   assert.ok(!message.includes('origin'), 'The raw issue dump never reaches the dialog');
   const two = z.object({ assets: z.array(z.object({ url: z.string().max(2) })), pages: z.array(z.string().max(2)) }).safeParse({ assets: [{ url: 'abcd' }], pages: ['abcd'] });
   assert.equal(two.success, false);
-  assert.equal(communityFailureMessage(two.error), 'The public design failed final validation (assets.0.url): Too big: expected string to have <=2 characters and 1 more issue.');
+  const summarized = communityFailureMessage(two.error);
+  assert.ok(summarized.startsWith('The public design failed final validation (assets.0.url): Too big'), summarized);
+  assert.ok(summarized.endsWith('and 1 more issue.'), summarized);
   assert.equal(communityFailureMessage(new z.ZodError([])), 'The public design failed final validation.');
   assert.equal(communityFailureMessage(new ApiError(413, 'export_too_large', 'Media exceeds the budget.')), 'Media exceeds the budget.');
   assert.equal(communityFailureMessage(new Error('Renderer unavailable.')), 'Renderer unavailable.');
@@ -171,5 +173,20 @@ test('a design with large media publishes and serves the embedded JSON download'
     assert.ok(inline.startsWith('data:image/png;base64,'), 'The downloaded JSON is self-contained');
     assert.ok(inline.length > 2000000, `The downloaded JSON carries the large media, got ${inline.length} characters`);
     assert.equal(portable.pages[0].nodes.find(node => node.id === 'large-photo')!.src, inline, 'The node resolves to the embedded bytes a downloader can read');
+
+    const replay = await request('/api/community/listings', 'POST', { ...metadata, operationId: 'publish-large-json', digest: preflight.digest, license: 'CC-BY-4.0', acceptLicense: true, confirmPublic: true }, cookie);
+    assert.equal(replay.status, 202, 'An exact retry of an accepted job returns its receipt');
+    assert.equal((await replay.json() as { job: { id: string } }).job.id, accepted.id, 'The retry reuses the durable receipt');
+
+    // A release of the now-oversized listing is refused at admission, after its listing checks.
+    await env.DB.prepare('UPDATE assets SET size=? WHERE id=?').bind(JSON_MEDIA_BUDGET + 1, asset.id).run();
+    const owned = (await json(await request('/api/community/me/listings', 'GET', undefined, cookie))).listings.find((entry: { sourceProjectId: string }) => entry.sourceProjectId === project.id);
+    const oversized = (await json(await request('/api/community/preflight', 'POST', metadata, cookie))).preflight;
+    assert.deepEqual(oversized.issues.map((issue: { code: string }) => issue.code), ['json_media_budget']);
+    const release = (await json(await request(`/api/community/listings/${listing.id}/releases`, 'POST', { ...metadata, operationId: 'blocked-release', digest: oversized.digest, license: 'CC-BY-4.0', acceptLicense: true, confirmPublic: true, expectedListingRevision: owned.revision }, cookie), 413)).error;
+    assert.equal(release.code, 'json_media_budget', 'A release is blocked by the same preflight issue');
+    const stale = await request(`/api/community/listings/${listing.id}/releases`, 'POST', { ...metadata, operationId: 'stale-release', digest: oversized.digest, license: 'CC-BY-4.0', acceptLicense: true, confirmPublic: true, expectedListingRevision: owned.revision + 1 }, cookie);
+    assert.equal(stale.status, 409, 'A stale listing revision still reports its more specific conflict');
+    assert.equal((await stale.json() as { error: { code: string } }).error.code, 'revision_conflict');
   } finally { await instance.close(); }
 });

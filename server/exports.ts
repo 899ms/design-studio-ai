@@ -106,13 +106,13 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
   if (['glb', 'gltf'].includes(options.format) && !doc.pages[options.pageIndex].nodes.some(node => node.type === 'model3d')) fail(400, 'unsupported_export', 'Scene export requires a 3D object on the selected page.');
   const extension = options.format==='editable-scene'?'json':['react','motion','png-sequence','spritesheet','scene-angles'].includes(options.format) ? 'zip' : options.format;
   const headers = { 'Content-Type': mimeTypes[options.format], 'Content-Disposition': `attachment; filename="${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.${extension}"`, 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' };
-  const embedded = new Map<string, string>(), embeddedSizes = new Map<{bytes:number;message:string}, number>();
+  const embedded = new Map<string, string>(), embeddedSizes = new Map<number, number>();
   /** Owned media becomes a data URL only inside the produced artifact; the validated document keeps its references. */
   const embed = async (url: string, budget: {bytes:number;message:string}): Promise<string> => {
     if (!url.startsWith('/api/assets/') && !url.startsWith('/api/community/')) return url;
     if (embedded.has(url)) return embedded.get(url)!;
-    const asset = await resolveAsset(url), embeddedSize = (embeddedSizes.get(budget) ?? 0) + asset.bytes.byteLength;
-    embeddedSizes.set(budget, embeddedSize);
+    const asset = await resolveAsset(url), embeddedSize = (embeddedSizes.get(budget.bytes) ?? 0) + asset.bytes.byteLength;
+    embeddedSizes.set(budget.bytes, embeddedSize);
     if (embeddedSize > budget.bytes) fail(413, 'export_too_large', budget.message);
     const result = `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
     embedded.set(url, result);

@@ -47,12 +47,13 @@ export async function publishCommunity(env:Bindings,userId:string,input:unknown,
  const profile=await communityProfile(env,userId);if(!profile)fail(409,'profile_required','Choose your public creator profile before publishing.');
  const {operationId,digest,license,acceptLicense,confirmPublic,expectedListingRevision,...metadata}=value;
  const inspected=await inspectPublication(env,userId,metadata);if(inspected.preflight.digest!==digest)fail(409,'preflight_changed','Public content or options changed. Review a fresh preflight.');
- // Preflight issues are blocking for every client, not only the dialog that disables its publish button.
- const blocking=inspected.preflight.issues[0];if(blocking)fail(413,blocking.code,blocking.message);
  const existing=listingId?await ownedCommunityListing(env,userId,listingId):await env.DB.prepare('SELECT * FROM community_listings WHERE source_project_id=? AND user_id=?').bind(value.projectId,userId).first<CommunityListingRow>();
  if(existing?.source_project_id!==undefined&&existing.source_project_id!==value.projectId)fail(400,'source_mismatch','A listing can only release its original source project.');
  if(existing?.deleted)fail(409,'listing_deleted','This listing was permanently removed.');if(existing?.suppressed)fail(409,'listing_hidden','A moderator has hidden this listing.');
  if(existing&&expectedListingRevision!==existing.revision)fail(409,'revision_conflict','Reload the listing before publishing a release.');
+ // Preflight issues block every client, not only the dialog that disables its publish button. Listing state
+ // above keeps its more specific conflict ahead of this budget refusal.
+ const blocking=inspected.preflight.issues[0];if(blocking)fail(413,blocking.code,blocking.message);
  const listing=existing?.id??id(),jobId=id(),time=now(),version=(await env.DB.prepare('SELECT COALESCE(MAX(version),0)+1 version FROM community_versions WHERE listing_id=?').bind(listing).first<{version:number}>())!.version,epoch=existing?.epoch??1;
  const pinned:PublicationInput={document:inspected.preflight.document,metadata:inspected.value,disclosure:inspected.preflight.disclosure,assetSources:inspected.assetSources,attribution:inspected.attribution,creator:{handle:profile!.handle,displayName:profile!.displayName}};
  const claim=env.DB.prepare(`INSERT INTO community_jobs(id,user_id,operation_id,payload_hash,kind,listing_id,version,epoch,source_project_id,input,created_at,updated_at) SELECT ?,?,?,?,'publish',?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM projects WHERE id=? AND user_id=? AND revision=?) AND NOT EXISTS(SELECT 1 FROM community_source_locks WHERE project_id=? AND deleting=1) AND EXISTS(SELECT 1 FROM community_listings WHERE id=? AND user_id=? AND revision=? AND epoch=? AND deleted=0 AND suppressed=0 AND pending_job_id IS NULL) ON CONFLICT(user_id,operation_id) DO NOTHING`).bind(jobId,userId,operationId,payloadHash,listing,version,epoch,value.projectId,JSON.stringify(pinned),time,time,value.projectId,userId,value.expectedProjectRevision,value.projectId,listing,userId,existing?.revision??1,epoch);
