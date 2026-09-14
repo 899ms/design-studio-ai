@@ -41,6 +41,8 @@ export const clientEventSchema = z.object({
   page: z.enum(['home', 'projects', 'templates', 'design-systems', 'editor', 'observability', 'settings', 'docs', 'guide']).optional(),
   action: z.enum(['select', 'multiselect', 'move', 'resize', 'rotate', 'text_edit', 'font_change', 'duplicate', 'delete', 'group', 'ungroup', 'undo', 'redo', 'save', 'export', 'generate', 'navigate']).optional(),
   projectId: z.string().min(1).max(120).optional(), requestId: z.string().uuid().optional(),
+  // Browser-session scope only; it groups a visit without identifying a person across sessions.
+  sessionId: z.string().uuid().optional(),
   outcome: z.enum(['success', 'error']).optional(), errorCode: z.enum(['request_failed', 'network_error', 'unexpected_error', 'validation_error', 'revision_conflict']).optional(),
 }).strict();
 export type ClientTelemetryEvent = z.infer<typeof clientEventSchema>;

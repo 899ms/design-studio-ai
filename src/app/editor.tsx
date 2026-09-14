@@ -493,7 +493,13 @@ export function Editor({
   const manualSaving = useRef(false), syncUncertain = useRef(false);
   async function saveDocument<T>(path: string, body: unknown): Promise<T> {
     if (syncUncertain.current) throw new Error("Reload the project to reconcile the timed-out save before saving again.");
-    try { const input=operationJobSchema.parse({kind:'save',operationId:crypto.randomUUID(),input:body});return await (await runOperation(project.id,input,undefined)).json() as T; }
+    try {
+      const input=operationJobSchema.parse({kind:'save',operationId:crypto.randomUUID(),input:body});
+      const saved = await (await runOperation(project.id,input,undefined)).json() as T;
+      // Report only after the queued operation actually succeeds; queue acceptance alone is not a save.
+      void trackClient({ event: 'project_save', page: 'editor', projectId: project.id, outcome: 'success' });
+      return saved;
+    }
     catch (error) {
       if (error instanceof DocumentRequestTimeout && error.uncertainWrite) {
         syncUncertain.current = true;
@@ -1102,6 +1108,7 @@ export function Editor({
     setBusy(`Exporting ${format.toUpperCase()}`);
     setError("");
     setFailedExport("");
+    void trackClient({ event: 'export_start', page: 'editor', projectId: project.id });
     try {
       if (local) {
         if (doc.kind === "3d" && format === "png") {
@@ -1157,8 +1164,10 @@ export function Editor({
           ? "Choose Save as PDF in the print dialog."
           : "Your export is ready.",
       );
+      void trackClient({ event: 'export_finish', page: 'editor', projectId: project.id, outcome: 'success' });
     } catch (e) {
       setError(message(e));
+      void trackClient({ event: 'export_finish', page: 'editor', projectId: project.id, outcome: 'error', errorCode: 'unexpected_error' });
       if (!local && !["google", "mp4", "motion", "png-sequence", "spritesheet", "scene-angles"].includes(format))
         setFailedExport(format);
     } finally {
