@@ -3324,7 +3324,8 @@ details summary {
   gap: 0.55rem;
   white-space: nowrap;
 }
-.release-identity .release-changelog {
+.release-identity .release-changelog,
+.release-identity .release-agentkit {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;

@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 // from the released build without failing.
 const releasedVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 const changelogUrl = 'https://github.com/bestagentkits/design-studio-ai/releases';
+const agentKitUrl = 'https://agentkit.best';
 
 const publicPaths = ['/docs/community', '/', '/guide', '/docs', '/docs/revisions', '/docs/motion', '/docs/3d', '/docs/api', '/docs/cli', '/docs/mcp', '/docs/webmcp', '/docs/api-keys', '/docs/observability', '/docs/self-hosting'];
 const markdownPaths = ['/docs/community.md', '/docs.md', '/guide.md', '/docs/index.md', '/docs/quickstart.md', '/docs/revisions.md', '/docs/motion.md', '/docs/3d.md', '/docs/api.md', '/docs/cli.md', '/docs/mcp.md', '/docs/webmcp.md', '/docs/api-keys.md', '/docs/observability.md', '/docs/self-hosting.md'];
@@ -237,6 +238,12 @@ test('every public footer shows the released version and links to the release no
     expect((await link.boundingBox())?.height, path).toBeGreaterThan(0);
     await expect(link, path).toHaveAttribute('href', changelogUrl);
     expect(await link.getAttribute('rel'), path).toContain('noreferrer');
+    const agentKit = page.getByRole('link', { name: /AgentKit/ });
+    await expect(agentKit, path).toBeVisible();
+    // Visibility alone can be true for a zero-height element; require a real box.
+    expect((await agentKit.boundingBox())?.height, path).toBeGreaterThan(0);
+    await expect(agentKit, path).toHaveAttribute('href', agentKitUrl);
+    expect(await agentKit.getAttribute('rel'), path).toContain('noreferrer');
     await expect(page.locator('.release-version'), path).toBeVisible();
     await expect(page.locator('.release-version'), path).toHaveText(`v${releasedVersion}`);
     // Above the 760px breakpoint the identity must share a row with the footer's trailing anchor and
@@ -268,5 +275,6 @@ test('the server-rendered guide and documentation carry the release identity wit
     const html = await (await request.get(path)).text();
     expect(html, path).toContain(`>v${releasedVersion}<`);
     expect(html, path).toContain(`href="${changelogUrl}"`);
+    expect(html, path).toContain(`href="${agentKitUrl}"`);
   }
 });

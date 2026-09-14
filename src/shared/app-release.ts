@@ -11,3 +11,6 @@ export const repositoryUrl = 'https://github.com/bestagentkits/design-studio-ai'
 
 /** Release notes for every shipped version; the public footers' changelog destination. */
 export const changelogUrl = `${repositoryUrl}/releases`;
+
+/** AgentKit home; the public footers' brand-credit destination. */
+export const agentKitUrl = 'https://agentkit.best';
