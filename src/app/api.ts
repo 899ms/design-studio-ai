@@ -10,10 +10,23 @@ export class ApiError extends Error {
     super(message);
   }
 }
+function requestJsonBody(body: RequestInit['body']) {
+  if (typeof body !== 'string') return null;
+  try { const parsed = JSON.parse(body); return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null; } catch { return null; }
+}
+function appliedDesignSystemProject(path: string, body: RequestInit['body']) {
+  if (!/^\/api\/design-systems\/[^/?]+\/apply$/.test(path)) return undefined;
+  const projectId = requestJsonBody(body)?.projectId;
+  return typeof projectId === 'string' && projectId.length > 0 && projectId.length <= 120 ? projectId : undefined;
+}
 export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  if (options.method === 'POST') {
+    const generating = /^\/api\/projects\/([^/?]+)\/generate$/.exec(path);
+    if (generating) void trackClient({ event: 'generation_start', projectId: generating[1] });
+  }
   const response = await fetch(path, {
     credentials: "same-origin",
     ...options,
@@ -44,12 +57,18 @@ export async function api<T>(
   const method = options.method ?? 'GET';
   const projectMatch = /^\/api\/projects\/([^/?]+)(?:\/|$)/.exec(path);
   const projectId = projectMatch?.[1];
+  const requestId = response.headers.get('X-Request-ID');
+  const correlation = requestId ? { requestId } : {};
   if (method === 'POST' && path === '/api/projects') {
     const created = data as { project?: { id?: string } } | null;
     if (created?.project?.id) void trackClient({ event: 'project_create', projectId: created.project.id, outcome: 'success' });
   } else if (projectId && method !== 'GET') {
-    const event = /\/(document|merge)$/.test(path) ? 'project_save' : /\/generate$/.test(path) ? 'generation_finish' : /\/export$/.test(path) ? 'export_finish' : null;
-    if (event) void trackClient({ event, projectId, outcome: 'success', ...(response.headers.get('X-Request-ID') ? { requestId: response.headers.get('X-Request-ID')! } : {}) });
+    // Live-merge writes reach this transport directly; queued saves and exports report themselves from the editor.
+    const event = /\/(document|merge)$/.test(path) ? 'project_save' : /\/generate$/.test(path) ? 'generation_finish' : null;
+    if (event) void trackClient({ event, projectId, outcome: 'success', ...correlation });
+  } else if (method === 'POST') {
+    const appliedProject = appliedDesignSystemProject(path, options.body);
+    if (appliedProject) void trackClient({ event: 'design_system_apply', projectId: appliedProject, outcome: 'success', ...correlation });
   }
   return data as T;
 }

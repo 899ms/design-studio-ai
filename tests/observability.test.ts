@@ -171,5 +171,44 @@ test('provider measurements preserve zero and unknown and analytics requires exp
   assert.equal(providerUsage({ input_tokens: 0.5 }).inputTokens, null);
   assert.equal(posthogConfig({ POSTHOG_PROJECT_KEY: 'project-token' } as Bindings), null);
   assert.equal(posthogConfig({ POSTHOG_PROJECT_KEY: 'project-token', POSTHOG_HOST: 'https://user:password@example.com' } as Bindings), null);
+  assert.equal(posthogConfig({ POSTHOG_PROJECT_KEY: 'phx_personal_api_key', POSTHOG_HOST: 'https://us.i.posthog.com' } as Bindings), null);
   assert.deepEqual(posthogConfig({ POSTHOG_PROJECT_KEY: 'project-token', POSTHOG_HOST: 'https://eu.i.posthog.com' } as Bindings), { key: 'project-token', host: 'https://eu.i.posthog.com' });
+});
+
+test('posthog forwarding sends the documented payload and fails closed without blocking the product', async t => {
+  const { env, request, register } = await setup(t), a = await register('posthog@example.test');
+  const created = await request('/api/projects', 'POST', { name: 'Analytics' }, a.cookie);
+  const project = (await created.json()).project;
+  const original = globalThis.fetch;
+  const sent: { url: string; init: RequestInit }[] = [];
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ url: String(input), init: init ?? {} });
+    return new Response('{"status":1}', { status: 200 });
+  }) as typeof fetch;
+  env.POSTHOG_PROJECT_KEY = 'phc_test'; env.POSTHOG_HOST = 'https://us.i.posthog.com';
+  const sessionId = crypto.randomUUID();
+  const response = await request('/api/observability/client-events', 'POST', { event: 'project_open', projectId: project.id, sessionId }, a.cookie);
+  assert.equal(response.status, 202); assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, 'https://us.i.posthog.com/i/v0/e/');
+  assert.equal(sent[0].init.method, 'POST'); assert.equal(sent[0].init.redirect, 'manual');
+  assert.deepEqual(sent[0].init.headers, { 'Content-Type': 'application/json' });
+  const body = JSON.parse(String(sent[0].init.body));
+  assert.equal(body.api_key, 'phc_test'); assert.equal(body.event, 'studio_project_open');
+  assert.equal(body.distinct_id, a.user.id); assert.ok(body.uuid); assert.ok(!Number.isNaN(Date.parse(body.timestamp)));
+  assert.equal(body.properties.$process_person_profile, false); assert.equal(body.properties.$geoip_disable, true); assert.equal(body.properties.$ip, null);
+  assert.equal(body.properties.$session_id, sessionId); assert.equal(body.properties.project_id, project.id); assert.equal(body.properties.source, 'design-studio-ai');
+  assert.equal((await request('/api/observability/client-events', 'POST', { event: 'page_view', page: 'home', sessionId })).status, 202);
+  assert.equal(JSON.parse(String(sent[1].init.body)).distinct_id, `anonymous:${sessionId}`);
+  const configured = sent.length;
+  env.POSTHOG_HOST = 'http://us.i.posthog.com';
+  assert.equal((await request('/api/observability/client-events', 'POST', { event: 'page_view', page: 'home' }, a.cookie)).status, 202);
+  env.POSTHOG_HOST = 'https://us.i.posthog.com'; env.POSTHOG_PROJECT_KEY = 'phx_personal_api_key';
+  assert.equal((await request('/api/observability/client-events', 'POST', { event: 'page_view', page: 'home' }, a.cookie)).status, 202);
+  assert.equal(sent.length, configured);
+  env.POSTHOG_PROJECT_KEY = 'phc_test';
+  globalThis.fetch = (async () => { throw new Error('analytics offline'); }) as typeof fetch;
+  assert.equal((await request('/api/observability/client-events', 'POST', { event: 'page_view', page: 'home' }, a.cookie)).status, 202);
+  const summary = await (await request('/api/observability/summary', 'GET', undefined, a.cookie)).json() as TelemetrySummary;
+  assert.equal(summary.coverage.posthog.configured, true); assert.equal(summary.coverage.posthog.deliveryFailures, 1);
 });
