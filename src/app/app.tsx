@@ -48,6 +48,7 @@ import { resumeCommunitySignIn } from './community-navigation';
 import { CommunityJobStatus } from './community-job-status';
 import type { CommunityJob } from '../shared/community';
 import { useCommunityEnabled, storedCommunityImport } from './community-client';
+import { ReleaseIdentity } from './release-identity';
 
 type Kind = DesignDocument["kind"];
 const kinds: {
@@ -1137,6 +1138,7 @@ export function App() {
           <footer className="home-footer">
             <span>Made for people. Open to agents.</span>
             <div className="footer-links">
+              <ReleaseIdentity />
               <a className="text-button" href="/guide">
                 Guide <ArrowRight size={14} />
               </a>

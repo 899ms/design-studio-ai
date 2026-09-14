@@ -1,4 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+
+// Read the expected version from its only authority. Hardcoding it here would let the footer drift
+// from the released build without failing.
+const releasedVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
+const changelogUrl = 'https://github.com/bestagentkits/design-studio-ai/releases';
 
 const publicPaths = ['/docs/community', '/', '/guide', '/docs', '/docs/revisions', '/docs/motion', '/docs/3d', '/docs/api', '/docs/cli', '/docs/mcp', '/docs/webmcp', '/docs/api-keys', '/docs/observability', '/docs/self-hosting'];
 const markdownPaths = ['/docs/community.md', '/docs.md', '/guide.md', '/docs/index.md', '/docs/quickstart.md', '/docs/revisions.md', '/docs/motion.md', '/docs/3d.md', '/docs/api.md', '/docs/cli.md', '/docs/mcp.md', '/docs/webmcp.md', '/docs/api-keys.md', '/docs/observability.md', '/docs/self-hosting.md'];
@@ -215,4 +221,52 @@ test('guide starter briefs copy the selected content and preserve keyboard-acces
   await page.keyboard.press('Enter');
   await expect(page.locator('.guide-faq details').first()).toHaveAttribute('open', '');
   await fitsViewport(page);
+});
+
+// Runs in both the desktop (1440x1000) and mobile (390x844) projects, so the 390px layout of every
+// public footer is measured here. Assertions on `/` auto-retry until the SPA renders the footer,
+// because the static no-JavaScript homepage fallback has no site footer at all.
+test('every public footer shows the released version and links to the release notes', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const path of ['/', '/guide', '/docs']) {
+    await page.goto(path);
+    const link = page.getByRole('link', { name: /Changelog/ });
+    await expect(link, path).toBeVisible();
+    // Visibility alone can be true for a zero-height element; require a real box.
+    expect((await link.boundingBox())?.height, path).toBeGreaterThan(0);
+    await expect(link, path).toHaveAttribute('href', changelogUrl);
+    expect(await link.getAttribute('rel'), path).toContain('noreferrer');
+    await expect(page.locator('.release-version'), path).toBeVisible();
+    await expect(page.locator('.release-version'), path).toHaveText(`v${releasedVersion}`);
+    // Above the 760px breakpoint the identity must share a row with the footer's trailing anchor and
+    // sit to its left; the positional `:last-child` / `margin-left:auto` rules are what keep it there,
+    // so a new sibling that pushed it onto its own row would be caught here. Below 760px the homepage
+    // footer stacks into a column by design, so only the wide layout carries this intent.
+    if ((page.viewportSize()?.width ?? 0) > 760) {
+      const trailing = path === '/'
+        ? page.locator('.home-footer .footer-links > a').last()
+        : page.locator(path === '/guide' ? '.guide-footer > a:last-child' : '.docs-site-footer > a:last-child');
+      const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
+      const identityBox = (await page.locator('.release-identity').boundingBox())!;
+      const anchorBox = (await trailing.boundingBox())!;
+      expect(Math.abs(centre(identityBox) - centre(anchorBox)), path).toBeLessThan(8);
+      expect(identityBox.x + identityBox.width, path).toBeLessThanOrEqual(anchorBox.x + 1);
+    }
+    await fitsViewport(page);
+  }
+  expect(errors).toEqual([]);
+});
+
+// `/guide` and `/docs` are rendered to HTML before hydration, so a visitor without JavaScript must
+// still see both. The version span's own text is asserted because the pre-existing
+// `releases/tag/v0.4.3` URLs in documentation.tsx already contain the bare version string, and the
+// changelog href is asserted with its closing quote because `.../releases` is a prefix of those
+// same `.../releases/tag/...` URLs.
+test('the server-rendered guide and documentation carry the release identity without JavaScript', async ({ request }) => {
+  for (const path of ['/guide', '/docs']) {
+    const html = await (await request.get(path)).text();
+    expect(html, path).toContain(`>v${releasedVersion}<`);
+    expect(html, path).toContain(`href="${changelogUrl}"`);
+  }
 });
