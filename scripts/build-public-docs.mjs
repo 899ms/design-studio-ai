@@ -10,6 +10,8 @@ const sourceOrigin = 'https://studio.agentkit.best';
 const configured = new URL(process.env.PUBLIC_SITE_URL || process.env.APP_URL || sourceOrigin);
 if (configured.username || configured.password || !['https:', 'http:'].includes(configured.protocol)) throw new Error('PUBLIC_SITE_URL must be an HTTP(S) public origin without credentials.');
 const origin = configured.origin;
+// The released version is the build's version; package.json stays the only authority.
+const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const template = await readFile(join(output, 'index.html'), 'utf8');
 if (!template.includes('id="root"')) throw new Error('Run Vite build before public documentation generation.');
 const compilation = await build({
@@ -32,6 +34,7 @@ export const renderGuide = () => renderToString(React.createElement(GuideApp));`
   platform: 'node',
   format: 'cjs',
   target: 'node24',
+  define: { __APP_VERSION__: JSON.stringify(version) },
   loader: { '.css': 'empty' },
   write: false,
   logLevel: 'warning',
@@ -96,6 +99,12 @@ function page(path, title, description, markup, type = 'TechArticle') {
 const repositoryUrl = 'https://github.com/bestagentkits/design-studio-ai';
 const write = async (relative, value) => { const file = join(output, relative); await mkdir(dirname(file), { recursive: true }); await writeFile(file, value); };
 const records = [];
+// A missing __APP_VERSION__ define renders a valid-looking footer with no version and no error, so
+// fail the build instead of silently shipping version-less public pages. Both server-rendered
+// surfaces are checked: the guide and every documentation page.
+function assertReleaseVersion(surface, markup) {
+  if (!markup.includes(`>v${version}<`)) throw new Error(`Public ${surface} build lost the application version; check the esbuild define for __APP_VERSION__.`);
+}
 for (const section of content.sections) {
   const name = section.path === '/docs' ? 'quickstart' : section.path.split('/').pop();
   const sectionText = section.id === 'rest'
@@ -103,10 +112,13 @@ for (const section of content.sections) {
     : markdown(content.renderContent(section.id));
   const body = `# ${section.title}\n\n> ${section.description}\n\n${sectionText}`;
   await write(`docs/${name}.md`, body);
-  await write(section.path === '/docs' ? 'docs/index.html' : `docs/${name}/index.html`, page(section.path, section.title, section.description, content.renderDocs(section.id)));
+  const docsMarkup = content.renderDocs(section.id);
+  assertReleaseVersion(`documentation ${section.path}`, docsMarkup);
+  await write(section.path === '/docs' ? 'docs/index.html' : `docs/${name}/index.html`, page(section.path, section.title, section.description, docsMarkup));
   records.push({ ...section, markdownPath: `/docs/${name}.md`, body });
 }
 const guideMarkup = content.renderGuide();
+assertReleaseVersion('guide', guideMarkup);
 const guideDescription = 'A visual beginner guide to choosing a template, writing a useful brief, refining a design, inspecting the preview, exporting, and connecting an agent.';
 await write('guide/index.html', page('/guide', 'Your first design', guideDescription, guideMarkup, 'Article'));
 const guideText = markdown(guideMarkup, '/guide');

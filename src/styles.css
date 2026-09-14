@@ -3313,7 +3313,21 @@ details summary {
 .footer-links {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--s6);
+}
+/* Build identity shown in the homepage, guide, and documentation footers. */
+.release-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  white-space: nowrap;
+}
+.release-identity .release-changelog {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 @media (max-width: 760px) {
   .documentation-shortcut {
