@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app } from "../server/index";
 import { FileBucket, SqliteDatabase } from "../server/node-adapters";
-import { hash, secret } from "../server/security";
+import { decrypt, hash, secret } from "../server/security";
 import type { Bindings } from "../server/types";
 test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and OAuth", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "design-studio-test-"));
@@ -88,6 +88,54 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
     });
     assert.equal(second.status, 201);
     const bob = second.headers.get("set-cookie")!.split(";")[0];
+    const aliceId = (
+      await db
+        .prepare("SELECT id FROM users WHERE email=?")
+        .bind("alice@example.com")
+        .first<{ id: string }>()
+    )!.id;
+    await t.test(
+      "health surfaces the deployed revision and tolerates a missing release asset",
+      async () => {
+        const baseline = await request("/api/health");
+        assert.equal(baseline.status, 200);
+        const baselineBody = (await baseline.json()) as {
+          ok?: unknown;
+          service?: unknown;
+          revision?: unknown;
+        };
+        assert.equal(baselineBody.ok, true);
+        assert.equal(baselineBody.service, "design-studio-ai");
+        assert.equal(baselineBody.revision, null);
+
+        const sha = "c0ffee1234567890abcdef1234";
+        const deployed = await app.request(
+          "https://studio.example/api/health",
+          {},
+          {
+            ...env,
+            ASSETS: {
+              async fetch(req: Request) {
+                if (new URL(req.url).pathname !== "/release.json")
+                  return new Response("Not found", { status: 404 });
+                return new Response(JSON.stringify({ sha }), {
+                  headers: { "Content-Type": "application/json" },
+                });
+              },
+            },
+          },
+        );
+        assert.equal(deployed.status, 200);
+        const deployedBody = (await deployed.json()) as {
+          ok?: unknown;
+          service?: unknown;
+          revision?: unknown;
+        };
+        assert.equal(deployedBody.ok, true);
+        assert.equal(deployedBody.service, "design-studio-ai");
+        assert.equal(deployedBody.revision, sha);
+      },
+    );
     await t.test("credentials and CSRF", async () => {
       assert.equal(
         (
@@ -201,6 +249,19 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
           env,
         );
         assert.equal(upload.status, 201);
+        const gltfJson = JSON.stringify({asset:{version:'2.0'},scenes:[{}],scene:0});
+        const jsonChunk = Buffer.from(gltfJson.padEnd(Math.ceil(gltfJson.length/4)*4,' '));
+        const glb = Buffer.alloc(20+jsonChunk.length);glb.write('glTF');glb.writeUInt32LE(2,4);glb.writeUInt32LE(glb.length,8);glb.writeUInt32LE(jsonChunk.length,12);glb.writeUInt32LE(0x4e4f534a,16);jsonChunk.copy(glb,20);
+        for (const mimeType of ['', 'application/octet-stream']) {
+          const body=new FormData();body.set('file',new File([glb],'browser-model.GLB',{type:mimeType}));
+          const result=await app.request(`https://studio.example/api/projects/${project.id}/assets`,{method:'POST',headers:{Cookie:alice,Origin:'https://studio.example'},body},env);
+          assert.equal(result.status,201);const model=(await result.json() as any).asset;
+          assert.equal(model.mimeType,'model/gltf-binary');assert.equal(model.type,'model');
+          assert.deepEqual(Buffer.from(await (await request(model.url,'GET',undefined,alice)).arrayBuffer()),glb);
+        }
+        const invalidModel=new FormData();invalidModel.set('file',new File(['not a GLB'],'fake.glb',{type:'application/octet-stream'}));
+        const invalidUpload=await app.request(`https://studio.example/api/projects/${project.id}/assets`,{method:'POST',headers:{Cookie:alice,Origin:'https://studio.example'},body:invalidModel},env);
+        assert.equal(invalidUpload.status,400);assert.equal((await invalidUpload.json() as any).error.code,'invalid_media');
         const asset = ((await upload.json()) as any).asset;
         assert.equal((await request(asset.url)).status, 401);
         assert.equal(
@@ -334,7 +395,10 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
         } finally {
           reopened.close();
         }
-        await assert.rejects(() => env.ASSETS_BUCKET.get("../outside"));
+        await assert.rejects(
+          () => env.ASSETS_BUCKET.get("../outside"),
+          /Invalid storage key/,
+        );
       },
     );
     let token = "";
@@ -348,9 +412,17 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
       );
       assert.equal(saved.status, 200);
       const provider = await db
-        .prepare("SELECT encrypted_key FROM providers")
+        .prepare(
+          "SELECT encrypted_key FROM providers WHERE user_id=? AND provider=?",
+        )
+        .bind(aliceId, "openai")
         .first<{ encrypted_key: string }>();
-      assert.ok(!provider?.encrypted_key.includes("sk-private"));
+      assert.ok(provider, "alice's openai provider row exists");
+      assert.ok(!provider.encrypted_key.includes("sk-private-test-value"));
+      assert.equal(
+        await decrypt(env, provider.encrypted_key),
+        "sk-private-test-value",
+      );
       const configs = await (
         await request("/api/providers", "GET", undefined, alice)
       ).text();
@@ -459,6 +531,28 @@ test("real SQLite auth, ownership, CAS, private assets, snapshots, BYOK, MCP and
       for (const [id, name] of [[4, "preview_project"], [5, "unpreview_project"], [6, "share_project"], [7, "unshare_project"]] as const) {
         const response = await callTool(id, name);
         assert.equal(response.status, 200, name);
+        const body = (await response.json()) as {
+          result: { isError?: boolean; content: Array<{ text: string }> };
+        };
+        assert.notEqual(body.result.isError, true, name);
+        const payload = JSON.parse(body.result.content[0].text) as {
+          url?: unknown;
+          revision?: unknown;
+          ok?: unknown;
+        };
+        if (name === "unpreview_project" || name === "unshare_project") {
+          assert.deepEqual(payload, { ok: true }, name);
+        } else {
+          assert.ok(
+            typeof payload.url === "string" &&
+              payload.url.startsWith("https://studio.example/published/"),
+            name,
+          );
+          assert.ok(
+            typeof payload.revision === "number" && payload.revision > 0,
+            name,
+          );
+        }
       }
       const invoked = await request(
         "/mcp",

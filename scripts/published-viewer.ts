@@ -1,3 +1,4 @@
+import { createTimelineAudioEngine, timelineAudioCues, type TimelineAudioEngine } from '../src/shared/timeline-audio';
 import { creativeGifDuration } from '../src/app/creative-elements-export';
 import {motionDuration} from '../src/shared/motion-duration';
 import { mountSceneComposition } from '../src/shared/scene-composition';
@@ -81,8 +82,34 @@ if (source?.textContent) {
     controls.appendChild(play); controls.appendChild(scrub); document.body.appendChild(controls);
     let running = false, time = 0, frame = 0;
     const paint = () => { sections.forEach((section, index) => { scenePaint.get(index)?.(time); const root = roots.get(index); if (root) root.render(createElement(DocumentView, { doc, pageIndex: index, time, playback: running })); else { const svg = section.querySelector('svg'); if (svg) svg.outerHTML = renderSvg(doc, index, time); } for (const node of doc.pages[index].nodes.filter(n => n.type === 'model3d' && n.visible !== false)) { section.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`)?.setAttribute('visibility', 'hidden'); const host = section.querySelector<HTMLElement>(`[data-studio-object="${CSS.escape(node.id)}"]`); if (host) { const animated = interpolateNode(node, doc, time), page = doc.pages[index]; host.style.left = `${animated.x / page.width * 100}%`; host.style.top = `${animated.y / page.height * 100}%`; host.style.width = `${animated.width / page.width * 100}%`; host.style.height = `${animated.height / page.height * 100}%`; host.style.opacity = String(animated.opacity ?? 1); } } }); scrub.value = String(time); };
-    play.onclick = () => { running = !running; play.textContent = running ? 'Pause' : 'Play animation'; cancelAnimationFrame(frame); if (!running) return; if (time >= duration) time = 0; const start = performance.now() - time * 1000; const tick = () => { time = Math.min(duration, (performance.now() - start) / 1000); paint(); if (time < duration && running) frame = requestAnimationFrame(tick); else { running = false; play.textContent = 'Play animation'; } }; tick(); };
-    scrub.oninput = () => { time = Number(scrub.value); running = false; cancelAnimationFrame(frame); play.textContent = 'Play animation'; paint(); };
+    const audioCues = timelineAudioCues(doc.pages.flatMap(page => page.nodes), duration);
+    const abort = new AbortController();
+    let audio: TimelineAudioEngine | undefined;
+    const audioNotice = document.createElement('p'); audioNotice.setAttribute('role', 'alert'); controls.after(audioNotice);
+    const stop = () => { running = false; cancelAnimationFrame(frame); audio?.pause(time); play.textContent = 'Play animation'; };
+    const showError = (error: Error) => { stop(); audioNotice.textContent = error.message; };
+    window.addEventListener('pagehide', () => { stop(); abort.abort(); }, { once: true });
+    if (audioCues.length) {
+      play.disabled = true; play.textContent = 'Loading audio…';
+      try { audio = await createTimelineAudioEngine(audioCues, { signal: abort.signal, onError: showError }); }
+      catch (error) { if (!abort.signal.aborted) showError(error as Error); }
+      play.disabled = false; play.textContent = 'Play animation';
+      // Timeline controls own sound, including media controls rendered by DocumentView.
+      for (const element of document.querySelectorAll<HTMLMediaElement>('audio,video')) { element.muted = true; element.controls = false; }
+    }
+    play.onclick = async () => {
+      if (running) { stop(); return; }
+      if (audioCues.length && !audio) { showError(new Error('Audio could not load. Reload the page after checking the media source.')); return; }
+      if (time >= duration) time = 0;
+      running = true; play.textContent = 'Pause'; audioNotice.textContent = '';
+      try { await audio?.play(time, duration); } catch (error) { showError(error as Error); return; }
+      if (!running || abort.signal.aborted) { audio?.pause(time); return; }
+      const start = performance.now() - time * 1000;
+      const tick = () => { time = audio ? audio.currentTime() : Math.min(duration, (performance.now() - start) / 1000); paint(); if (time < duration && running) frame = requestAnimationFrame(tick); else stop(); };
+      tick();
+    };
+    scrub.oninput = () => { time = Number(scrub.value); stop(); audio?.seek(time); paint(); };
+
     paint();
   }
   })().catch(error => { const notice = document.createElement('p'); notice.setAttribute('role', 'alert'); notice.textContent = `Animation could not load: ${String(error)}`; document.body.append(notice); });

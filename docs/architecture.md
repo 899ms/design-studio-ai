@@ -41,6 +41,8 @@ The [scene compositor](../src/shared/scene-composition.ts) is shared by the edit
 
 Project thumbnails use the isolated server export renderer and persist PNG bytes in the existing asset bucket, indexed by project/document revision in `project_thumbnails`. The authenticated thumbnail endpoint serves cached bytes; missing current covers render on demand. Database leases serialize renders per owner across workers, expire after 120 seconds, and guard publication against deleted projects or replaced leases. A busy request returns 202 with Retry-After; failures preserve prior covers and impose a 30-second cooldown. Only the latest two completed revisions are retained, and project deletion removes their stored bytes. Project summaries expose the current revision URL and latest ready thumbnail revision, allowing the workspace to keep the old cover while fetching its replacement. Reloading never requires client-side document/3D rendering. Motion uses the timeline midpoint; images fit within 480×480. Shared ordered canvas composition preserves 2D/3D paint order. External media must first be imported into the project, matching the cloud export boundary.
 
+Private [visual inspection](../server/visual-inspection.ts) renders saved pages or paginated project contact sheets, and paginated first-page workspace covers. The [shared request and pixel mapping](../src/shared/visual-inspection.ts) identifies every image by project, revision, page, time and bounds. An internal export-renderer hook uses the same DOM/scene capture with bounded dimensions, source pixels, output bytes and a 45-second capture deadline per project. It does not publish or persist images. A revision change during capture returns 409. Workspace metadata describes individual project snapshots; it is not an atomic snapshot of the account. MCP and WebMCP return native image blocks, while CLI writes PNGs with metadata. WebMCP inspection registers in the signed-in workspace and editor; see [agent access](agents.md#visual-inspection) for the saved-state workflow.
+
 Browser mesh editing runs validated operations in a [geometry worker](../scripts/geometry-worker.ts); vertices, triangles, UVs, bones and weights remain structured document data. Mesh manipulation, UV projection and bone editing do not execute agent-supplied JavaScript. Imported GLB objects can be placed and exported, while direct vertex editing currently operates on document meshes or converted primitives.
 
 Live editing uses [three-way merge](../src/shared/document-merge.ts) through [collaboration routes](../server/collaboration.ts). The editor checks for remote revisions on a 1.2-second interval and merges independent field changes. Overlapping edits return explicit conflicts; the UI preserves its local state and pauses automatic writes. This is polling synchronization, not a WebSocket presence service. Undo snapshots are rebased against remote edits; incompatible snapshots are removed with a notice. Document writes retain the existing atomic owner/revision check and never alter brief approval.
@@ -103,7 +105,7 @@ Cloud binary rendering embeds owned assets and blocks external browser requests:
 
 SVG cannot preserve an interactive WebGL scene as editable geometry. Raster/PDF/video render real WebGL content. Format support does not imply every node remains natively editable in every output.
 
-Cloud motion composition preserves layer order and mixes imported audio/video tracks. The browser fallback records silent motion. Camera and light properties, object transforms, materials, mesh/UV data and skinning are serialized scene state; preview playback never writes animated poses into the stored bind pose.
+Motion composition preserves layer order; editor/viewer playback and browser/cloud recording share the [timeline audio engine](../src/shared/timeline-audio.ts) for cue start/end, source offset, gain, mute and loops. Camera and light properties, fog/bloom/emitters, object transforms, materials, mesh/UV data, imported clip placements and skinning are serialized scene state; preview playback never writes animated poses into the stored bind pose. The [3D guide](3d-characters.md) owns editable conversion limits, retained source assets, sampled framing and multi-time review exports.
 
 ## Activity and instrumentation boundaries
 
@@ -117,7 +119,7 @@ Sanitized client events use a strict allowlist and remain distinguishable from s
 
 [Deployment](deployment.md) covers secrets, migrations, storage, browsers, backups, and rollback. [Tests](../tests) cover schema/operations, content safety, tenant isolation, revisions, OAuth, publication, CLI subprocesses, provider requests, and exports. Browser checks exercise desktop/touch workflows. External credential-dependent success is separate from local contract validation.
 
-Release evidence and pending checks live in the [finalization report](../plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md). A build, filename, or configured key does not establish deployment, format validity, or provider success.
+Release evidence and pending checks live in the [finalization report](https://github.com/bestagentkits/design-studio-ai/blob/1a23d4a4a4ca4c14c6c15f2ae7318004a908ce2b/plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md). A build, filename, or configured key does not establish deployment, format validity, or provider success.
 
 Creative document versioning, immutable tiles, safe composites and current integration limits are described in [Creative tools](creative-tools.md).
 
@@ -128,3 +130,7 @@ Creative document versioning, immutable tiles, safe composites and current integ
 ## 3D character authoring
 
 [Editable 3D characters](3d-characters.md) describes the shared bounded scene-command pipeline, worker execution, inspection and portable skin/morph/paint data. The schema and operation owners remain canonical across clients.
+
+## Community publication boundary
+
+[Community](community.md) adds immutable community versions, owned file copies, durable jobs and a live-only search projection alongside the existing private projects and share snapshots. [Snapshot export](../server/snapshot-export.ts) reuses the renderer through an explicit authorized asset resolver; it does not impersonate a downloader or source owner. Tagged queue messages share the operation queue, while Node alternates the two durable runners. See the owning modules linked in the Community guide for concurrency and storage contracts.

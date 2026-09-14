@@ -3,7 +3,7 @@ import type { AssetRef, DesignDocument } from './schema';
 /** Explicit references only: free-form text and opaque user data must never be rewritten. */
 export function visitDocumentAssetIds(doc: DesignDocument, visit: (id: string) => string): void {
   for (const page of doc.pages) for (const node of page.nodes) {
-    if (node.scene?.material?.textureAssetId) node.scene.material.textureAssetId = visit(node.scene.material.textureAssetId);
+    for(const key of ['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const)if(node.scene?.material?.[key])node.scene.material[key]=visit(node.scene.material[key]!);
   }
   for (const character of doc.characters ?? []) for (const attachment of character.attachments) {
     if (attachment.assetId) attachment.assetId = visit(attachment.assetId);

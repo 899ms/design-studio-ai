@@ -1,0 +1,45 @@
+import { test, expect } from './authenticated-browser';
+import { request as playwrightRequest } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
+test('publish reviews a saved revision and explicit license before building real files',async({page,baseURL},testInfo)=>{
+  test.setTimeout(180_000);
+  const headers={Origin:baseURL!};const created=await page.request.post('/api/projects',{headers,data:{name:'Community publication browser check',kind:'web'}});expect(created.status()).toBe(201);const {project}=await created.json();
+  await page.goto(`/?project=${project.id}`);await page.getByRole('button',{name:'Publish to Community',exact:true}).click();
+  await page.getByLabel('Public display name',{exact:true}).fill('Community browser author');await page.getByLabel('Public handle',{exact:true}).fill('browser-author-'+Date.now());await page.getByRole('button',{name:'Save public profile'}).click();
+  await page.getByLabel('Description',{exact:true}).fill('A real locally rendered design for publication verification.');
+  await page.getByRole('button',{name:'Review public preflight'}).click();
+  await expect(page.getByRole('heading',{name:'What will be shared'})).toBeVisible();
+  await page.getByRole('checkbox',{name:'SVG',exact:true}).check();await page.getByRole('button',{name:'Review public preflight'}).click();
+  const publish=page.getByRole('button',{name:'Confirm and publish'});await expect(publish).toBeDisabled();
+  await page.getByRole('checkbox',{name:/I have the rights/}).check();await expect(publish).toBeDisabled();
+  await page.getByRole('checkbox',{name:/I reviewed the public content/}).check();await expect(publish).toBeEnabled({timeout:30_000});await publish.click();
+  await expect(page.getByRole('link',{name:'View published design'})).toBeVisible({timeout:120_000});await page.getByRole('link',{name:'View published design'}).click();
+  await expect(page.getByRole('heading',{name:'Community publication browser check',exact:true})).toBeVisible();
+  const file=page.getByRole('link',{name:/Studio project package/});await expect(file).toBeVisible();
+  const download=await page.request.get((await file.getAttribute('href'))!);expect(download.ok()).toBe(true);expect(download.headers()['content-type']).toContain('zip');expect((await download.body()).subarray(0,2).toString()).toBe('PK');
+  await expect(page.getByText('Page / screen 1',{exact:true})).toBeVisible();
+  const ownerListings=await (await page.request.get('/api/community/me/listings')).json();const listingId=ownerListings.listings.find((item:{title:string})=>item.title==='Community publication browser check').id;
+  // A fresh API context inherits the browser context's cookies; clear them so "anonymous" and
+  // "second user" are genuinely separate identities rather than aliases of the signed-in owner.
+  const publicApi=await playwrightRequest.newContext({baseURL,storageState:{cookies:[],origins:[]}});const publicSearch=await publicApi.get('/api/community/listings?limit=48');expect(publicSearch.ok()).toBe(true);const publicListings=await publicSearch.json();expect(publicListings.listings.some((item:{id:string})=>item.id===listingId)).toBe(true);
+  const anonymousWrite=await publicApi.post('/api/community/listings',{data:{}});expect(anonymousWrite.status()).toBe(401);
+  const secondUser=await playwrightRequest.newContext({baseURL,storageState:{cookies:[],origins:[]}});const secondRegistration=await secondUser.post('/api/auth/register',{headers,data:{email:`community-cross-owner-${randomUUID()}@studio.test`,name:'Community cross owner',password:randomUUID()+randomUUID()}});expect(secondRegistration.status()).toBe(201);
+  const secondProfile=await secondUser.put('/api/community/me/profile',{headers,data:{handle:`cross-owner-${randomUUID().slice(0,8)}`,displayName:'Community cross owner',bio:'',expectedProfileRevision:0}});expect(secondProfile.ok()).toBe(true);
+  const secondProjectResponse=await secondUser.post('/api/projects',{headers,data:{name:'Community cross owner probe',kind:'web'}});expect(secondProjectResponse.status()).toBe(201);const secondProject=await secondProjectResponse.json();
+  const secondMetadata={projectId:secondProject.project.id,expectedProjectRevision:secondProject.project.revision,title:'Community cross owner probe',description:'',tags:[],cover:{pageIndex:0}};
+  const secondPreflightResponse=await secondUser.post('/api/community/preflight',{headers,data:secondMetadata});expect(secondPreflightResponse.ok()).toBe(true);const secondPreflight=await secondPreflightResponse.json();
+  const crossOwnerRelease=await secondUser.post(`/api/community/listings/${listingId}/releases`,{headers,data:{...secondMetadata,operationId:randomUUID(),digest:secondPreflight.preflight.digest,license:'CC-BY-4.0',acceptLicense:true,confirmPublic:true,expectedListingRevision:1}});expect(crossOwnerRelease.status()).toBe(404);
+  const crossOwnerUnlist=await secondUser.post(`/api/community/listings/${listingId}/unlist`,{headers,data:{operationId:randomUUID(),expectedListingRevision:1}});expect(crossOwnerUnlist.status()).toBe(404);
+  await secondUser.dispose();await publicApi.dispose();
+  await page.goto('/community/publishing');await page.getByRole('button',{name:'Review update',exact:true}).click();await page.getByLabel('Description',{exact:true}).fill('Updated public metadata for the second immutable version.');await page.getByRole('button',{name:'Review public preflight'}).click();await page.getByRole('checkbox',{name:/I have the rights/}).check();await page.getByRole('checkbox',{name:/I reviewed the public content/}).check();await page.getByRole('button',{name:'Publish updated version',exact:true}).click();await expect(page.getByRole('link',{name:'View published design'})).toBeVisible({timeout:120_000});await page.getByRole('link',{name:'View published design'}).click();await expect(page.getByText('Website · Version 2',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Save Community publication browser check',exact:true}).click();
+  await page.reload();await expect(page.getByRole('button',{name:'Unsave Community publication browser check',exact:true})).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:'Use this design',exact:true}).click();await expect(page.getByRole('link',{name:'Open your private design'})).toBeVisible({timeout:60_000});
+  await page.getByRole('button',{name:'Report',exact:true}).click();await page.getByLabel('What should the moderator know?').fill('Browser verification: review this locally created test design.');await page.getByRole('button',{name:'Submit report',exact:true}).click();await expect(page.getByText('Report submitted privately to the moderation team.',{exact:true})).toBeVisible();
+  await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await expect(page.locator('.community-preview')).toBeInViewport();
+  await page.screenshot({path:`plans/2026-09-12-community-design-sharing/reports/community-detail-top-${testInfo.project.name}.png`});
+  await page.screenshot({path:`plans/2026-09-12-community-design-sharing/reports/community-detail-${testInfo.project.name}.png`,fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.goto('/community/publishing');await page.getByRole('button',{name:'Unlist',exact:true}).click();await page.getByRole('button',{name:'Unlist design',exact:true}).click();await expect(page.getByText(/unlisted · Version/)).toBeVisible();
+  await page.getByRole('button',{name:'Publish a design',exact:true}).click();await page.getByLabel('Import a Studio project package',{exact:true}).setInputFiles({name:'verified-browser-package.zip',mimeType:'application/zip',buffer:await download.body()});await expect(page.getByRole('link',{name:'Open your private design'})).toBeVisible({timeout:60_000});
+});

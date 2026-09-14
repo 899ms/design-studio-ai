@@ -7,7 +7,9 @@ import { inspectGif } from '../src/shared/gif-bounds';
 import { documentSaveSchema } from '../src/shared/document-save-contract';
 import { creativeSaveIdentity, readCreativeReceipt } from './creative-save-receipts';
 import { reserveAsset } from './asset-lifecycle';
+import { guardCommunityProjectDeletion } from './community-publication';
 import { publicCreativeProjection } from '../src/shared/public-creative-projection';
+import { upgradeDocument } from '../src/shared/document-upgrade';
 import { preparePaintingAssets } from './painting-assets';
 import { ownedDocumentAssetIds, remapDocumentAssets } from '../src/shared/document-asset-references';
 import {documentWriteSchema} from '../src/shared/document-write';
@@ -145,6 +147,10 @@ export async function storeAsset(
   await projectRow(c, projectId);
   if (data.byteLength > 20 * 1024 * 1024)
     fail(413, "asset_too_large", "Assets must be at most 20 MB.");
+  // Some browsers supply an empty or generic MIME type for local GLB files.
+  // The file signature below still validates the inferred media type.
+  if ((!mimeType || mimeType === 'application/octet-stream') && /\.glb$/i.test(name))
+    mimeType = 'model/gltf-binary';
   const allowed = [
     "image/png",
     "image/jpeg",
@@ -247,6 +253,7 @@ projectRoutes.get("/", async (c) => {
   const userId = owner(c);
   const q = c.req.query("q") ?? "";
   const kind = c.req.query("kind");
+  const limit = z.coerce.number().int().min(1).max(500).default(500).parse(c.req.query('limit'));
   const sort =
     {
       updated: "updated_at DESC",
@@ -254,9 +261,9 @@ projectRoutes.get("/", async (c) => {
       name: "name COLLATE NOCASE ASC",
     }[c.req.query("sort") ?? "updated"] ?? "updated_at DESC";
   const rows = await c.env.DB.prepare(
-    `SELECT projects.*, (SELECT MAX(revision) FROM project_thumbnails WHERE project_id=projects.id AND state='ready') AS thumbnail_revision FROM projects WHERE user_id=? AND (name LIKE ? OR description LIKE ?) ${kind ? "AND kind=?" : ""} ORDER BY ${sort} LIMIT 500`,
+    `SELECT projects.*, (SELECT MAX(revision) FROM project_thumbnails WHERE project_id=projects.id AND state='ready') AS thumbnail_revision FROM projects WHERE user_id=? AND (name LIKE ? OR description LIKE ?) ${kind ? "AND kind=?" : ""} ORDER BY ${sort} LIMIT ?`,
   )
-    .bind(userId, `%${q}%`, `%${q}%`, ...(kind ? [kind] : []))
+    .bind(userId, `%${q}%`, `%${q}%`, ...(kind ? [kind] : []), limit)
     .all<ProjectRow>();
   return c.json({
     projects: rows.results.map((row) => {
@@ -379,6 +386,7 @@ projectRoutes.put("/:id/document", async (c) => {
 });
 projectRoutes.delete("/:id", async (c) => {
   const row = await projectRow(c, c.req.param("id"));
+  await guardCommunityProjectDeletion(c.env, row.id, owner(c));
   // Close thumbnail publication before reading storage keys, so deletion cannot miss a late cover.
   await c.env.DB.prepare("UPDATE projects SET thumbnail_deleting=1 WHERE id=? AND user_id=?").bind(row.id, owner(c)).run();
   const assets = await c.env.DB.prepare(
@@ -416,7 +424,7 @@ async function createPublication(c: Context<Env>) {
   const projectId = c.req.param("id");
   if (!projectId) fail(400, "invalid_project", "Project ID is required.");
   const row = await projectRow(c, projectId);
-  const doc = publicCreativeProjection(documentSchema.parse(JSON.parse(row.document)));
+  const doc = publicCreativeProjection(upgradeDocument(documentSchema.parse(JSON.parse(row.document))));
   const refs = await validateAssets(c, doc, row.id);
   const slug = id();
   const replace = (url: string) =>

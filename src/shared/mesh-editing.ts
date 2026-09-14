@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { meshSchema, type MeshData } from './design-capabilities';
+import { refreshMeshShading } from './mesh-shading';
 
 export const meshEditSchema = z.object({
   op: z.enum(['translate', 'scale', 'extrude', 'inset', 'delete-faces', 'subdivide', 'weld', 'uv-planar', 'uv-sphere']),
@@ -63,5 +64,6 @@ export function editMesh(input: MeshData, operation: MeshEdit): MeshData {
     const axes = [0, 1, 2].sort((a, b) => (max[b] - min[b]) - (max[a] - min[a]));
     for (let i = 0; i < vertexCount; i++) { const [x, y, z] = vertex(mesh, i); if (edit.op === 'uv-sphere') { const radius = Math.hypot(x, y, z) || 1; mesh.uv.push(.5 + Math.atan2(z, x) / (2 * Math.PI), .5 - Math.asin(y / radius) / Math.PI); } else { const p = [x, y, z]; mesh.uv.push(...axes.slice(0, 2).map(axis => (p[axis] - min[axis]) / (max[axis] - min[axis] || 1))); } }
   }
+  refreshMeshShading(mesh, edit.op === 'uv-planar' || edit.op === 'uv-sphere');
   return meshSchema.parse(mesh);
 }

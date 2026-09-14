@@ -14,13 +14,13 @@ npm pack
 cd ../..
 ```
 
-Install the generated tarball with `npm install -g ./packages/cli/bestagentkits-design-studio-ai-0.4.0.tgz`, or install the published release directly:
+Install the generated tarball with `npm install -g ./packages/cli/bestagentkits-design-studio-ai-0.4.3.tgz`, or install the published release directly:
 
 ```sh
-npm install -g https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.0/bestagentkits-design-studio-ai-0.4.0.tgz
+npm install -g https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.3/bestagentkits-design-studio-ai-0.4.3.tgz
 ```
 
-The [v0.4.0 GitHub release](https://github.com/bestagentkits/design-studio-ai/releases/tag/v0.4.0) includes CLI and skill archives. The package is not published to the npm registry.
+The [v0.4.3 GitHub release](https://github.com/bestagentkits/design-studio-ai/releases/tag/v0.4.3) includes CLI and skill archives. The package is not published to the npm registry.
 
 The reference below follows this checkout. A released archive may lack newer commands or formats; inspect its `--help` and build from source when the needed capability is absent.
 
@@ -49,6 +49,10 @@ Use `design-systems schema` to inspect reusable library definitions before creat
 
 `projects check PROJECT_ID` returns deterministic preflight findings with page/node IDs and suggestions for text fitting, estimated contrast, missing media, bounds and export limitations. It reads the saved revision, makes no changes, and does not certify accessibility or visual quality.
 
+Use `projects inspect PROJECT_ID --output pages.png` for a saved-project contact sheet, or add `--mode page --page 0 --revision N` for a revision-bound page PNG. `projects overview --output-dir review` renders your projects' first-page covers. Both print revision, page identity, image bounds, pagination, and local file paths as JSON without raw base64. Follow `nextOffset` using `--offset` until it is null. Workspace files are named `workspace-OFFSET-IMAGE_INDEX.png`; repeating that output replaces the file. No images are written on an API error; an empty workspace writes no files.
+
+Read each command's `--help` for limits and selection options. Open the resulting PNGs with an image viewer before claiming visual review. Images reflect saved content, require the configured browser renderer, and do not publish or invoke a provider. Save and verify browser changes first. The [visual inspection guide](../../docs/agents.md#visual-inspection) explains equivalent REST, MCP and WebMCP calls and frame/coverage limitations.
+
 Use `dsa observability summary`, `dsa observability events`, or `dsa observability trace TRACE_ID` for activity and provider usage. Read `dsa observability --help` and each subcommand's help for filters; use the returned `nextCursor` with `events --cursor` for pagination. The default scope is the authenticated owner. `--scope all` requires an explicitly configured operator using a session/API key on the server; OAuth cannot obtain global access, and `--actor-id` requires operator scope.
 
 Usage `null` means unavailable, not zero. Measured-call counts and coverage describe partial data; `running` and `interrupted` do not prove provider completion. Recent activity is not online presence. See [activity, usage, and traces](../../docs/agents.md#activity-usage-and-traces) for interpretation and [the shared contract](../../src/shared/observability.ts) for result fields. Observing a trace never authorizes retrying a paid or mutating operation.
@@ -74,6 +78,12 @@ All fal modes return queued jobs. Poll to a completed asset before reporting suc
 For concurrent editing, retain the exact document and revision you read. `projects document changes` observes saved updates; `projects document merge` accepts your edited document with that original base. Resolve reported overlapping changes explicitly; never change the base or invent its revision to force a write. See the [revision workflow](../../docs/agents.md#revision-workflow).
 
 `api METHOD /api/path --file request.json` provides an explicit REST escape hatch constrained to the configured server. It neither bypasses server auth nor evaluates local code. Requests reject redirects to keep tokens bound to the configured origin.
+
+## Community designs
+
+`dsa community schema` discovers the current source build's shared commands and inputs. Search with `dsa community search --q TEXT --kind web --sort newest`; download an available artifact with `dsa community download LISTING_ID VERSION FILE_ID --out design.zip`. Import that portable archive using `dsa community import --file design.zip --operation-id UNIQUE_ID`, then poll `dsa community job UNIQUE_ID`. Imports and remixes own independent media.
+
+Publishing requires preflight, the exact reviewed digest and project revision, a stable operation ID, and explicit CC BY 4.0/public consent. Pass canonical JSON using `--file request.json`; retry an uncertain operation with the identical payload and ID. Existing project share/publish commands retain their original behavior. See the [Community guide](../../docs/community.md) for privacy, licenses, profiles and operator authorization. Community commands require the current source build until included in a tagged CLI release.
 
 ## Creative documents
 

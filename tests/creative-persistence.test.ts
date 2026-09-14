@@ -12,11 +12,31 @@ import type { Project, AssetRef } from '../src/shared/schema';
 import { upgradeDocument } from '../src/shared/document-upgrade';
 import { paintingSchema } from '../src/shared/painting-schema';
 import { encodePaintPng, paintHash } from '../src/shared/paint-png';
+import { builtStaticAssets } from './built-static-assets';
+
+function triangleGlb() {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const json = new TextEncoder().encode(JSON.stringify({
+    asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    buffers: [{ byteLength: positions.byteLength }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.byteLength, target: 34962 }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+  }));
+  const jsonLength = Math.ceil(json.length / 4) * 4;
+  const bytes = new Uint8Array(12 + 8 + jsonLength + 8 + positions.byteLength), header = new DataView(bytes.buffer);
+  header.setUint32(0, 0x46546c67, true); header.setUint32(4, 2, true); header.setUint32(8, bytes.length, true);
+  header.setUint32(12, jsonLength, true); header.setUint32(16, 0x4e4f534a, true);
+  bytes.fill(32, 20, 20 + jsonLength); bytes.set(json, 20);
+  header.setUint32(20 + jsonLength, positions.byteLength, true); header.setUint32(24 + jsonLength, 0x004e4942, true);
+  bytes.set(new Uint8Array(positions.buffer), 28 + jsonLength);
+  return bytes;
+}
 
 test('creative persistence validates real tile bytes, returns durable retry receipts and protects v2/publication boundaries', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'creative-persistence-')), db = new SqliteDatabase(join(directory, 'db.sqlite'));
   const origin = 'https://studio.example';
-  const env: Bindings = { DB: db, ASSETS_BUCKET: new FileBucket(join(directory, 'assets')), APP_URL: origin, ENCRYPTION_KEY: secret(), ALLOW_REGISTRATION: 'true' };
+  const env: Bindings = { DB: db, ASSETS_BUCKET: new FileBucket(join(directory, 'assets')), ASSETS: builtStaticAssets, APP_URL: origin, ENCRYPTION_KEY: secret(), ALLOW_REGISTRATION: 'true' };
   let cookie = '';
   const request = (path: string, method = 'GET', body?: unknown) => app.request(origin + path, { method, headers: { Origin: origin, Cookie: cookie, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }, env);
   const projectFrom = async (response: Response, status = 200) => { assert.equal(response.status, status, await response.clone().text()); return (await response.json() as { project: Project }).project; };
@@ -58,6 +78,59 @@ test('creative persistence validates real tile bytes, returns durable retry rece
       const snapshot = await db.prepare('SELECT document FROM publications WHERE slug=?').bind(slug).first<{ document: string }>(); assert.doesNotMatch(snapshot!.document, new RegExp(asset.id));
       assert.equal((await request(`/published/${slug}/assets/${asset.id}`)).status, 404);
       assert.equal((await request(`/published/${slug}/assets/${composite.assetId}`)).status, 200);
+    });
+    await t.test('publish preview and share exclude editable source checkpoints but preserve hidden toggle targets', async () => {
+      const project = await projectFrom(await request('/api/projects', 'POST', { name: 'Editable model', kind: '3d' }), 201);
+      const sourceBytes = triangleGlb(), uploadForm = new FormData();
+      uploadForm.append('file', new Blob([sourceBytes], { type: 'model/gltf-binary' }), 'source.glb');
+      const uploaded = await app.request(origin + `/api/projects/${project.id}/assets`, {
+        method: 'POST', headers: { Origin: origin, Cookie: cookie }, body: uploadForm,
+      }, env);
+      assert.equal(uploaded.status, 201, await uploaded.clone().text());
+      const source = (await uploaded.json() as { asset: AssetRef }).asset;
+      const document = structuredClone(project.document);
+      document.assets.push(source);
+      document.pages[0].nodes = [
+        { id: 'editable-model', name: 'Editable triangle', type: 'model3d', x: 0, y: 0, width: 100, height: 100,
+          scene: { mesh: { positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2] } } },
+        { id: 'source-checkpoint', name: 'Source checkpoint', type: 'model3d', x: 0, y: 0, width: 100, height: 100,
+          visible: false, locked: true, src: source.url, data: { sceneSourceCheckpoint: true } },
+        { id: 'checkpoint-child', name: 'Private descendant', type: 'model3d', parentId: 'source-checkpoint',
+          x: 0, y: 0, width: 100, height: 100, src: source.url },
+        { id: 'visible-checkpoint', name: 'Shown source checkpoint', type: 'model3d', x: 0, y: 0, width: 100, height: 100,
+          visible: true, src: source.url, data: { sceneSourceCheckpoint: true } },
+        { id: 'toggle-target', name: 'Hidden interactive panel', type: 'shape', visible: false, x: 0, y: 0, width: 100, height: 100 },
+        { id: 'toggle-button', name: 'Show panel', type: 'shape', x: 0, y: 0, width: 100, height: 40,
+          interactions: [{ trigger: 'click', action: 'toggle', target: 'toggle-target' }] },
+      ];
+      const saved = await projectFrom(await request(`/api/projects/${project.id}/document`, 'PUT', { document, expectedRevision: project.revision }));
+      for (const action of ['publish', 'preview', 'share']) {
+        const response = await request(`/api/projects/${project.id}/${action}`, 'POST', {});
+        assert.equal(response.status, 200, await response.clone().text());
+        const { url } = await response.json() as { url: string }, path = new URL(url).pathname, slug = path.split('/').pop()!;
+        const row = await db.prepare('SELECT document FROM publications WHERE slug=?').bind(slug).first<{ document: string }>();
+        const published = JSON.parse(row!.document) as Project['document'];
+        assert(!published.pages[0].nodes.some(node => ['source-checkpoint', 'checkpoint-child', 'visible-checkpoint'].includes(node.id)), action);
+        assert(!published.assets.some(asset => asset.id === source.id), action);
+        assert(!row!.document.includes(source.id), `${action}: source reference must not appear in public JSON`);
+        assert.equal(published.pages[0].nodes.find(node => node.id === 'toggle-target')?.visible, false);
+        assert.deepEqual(published.pages[0].nodes.find(node => node.id === 'toggle-button')?.interactions,
+          [{ trigger: 'click', action: 'toggle', target: 'toggle-target' }]);
+        const registered = await db.prepare('SELECT asset_id FROM publication_assets WHERE slug=? AND asset_id=?').bind(slug, source.id).first();
+        assert.equal(registered, null, `${action}: source bytes must not be registered publicly`);
+        const anonymous = (suffix: string) => app.request(origin + path + suffix, {}, env);
+        assert.equal((await anonymous(`/assets/${source.id}`)).status, 404, action);
+        const html = await anonymous(''); assert.equal(html.status, 200, action);
+        assert(!(await html.text()).includes(source.id), `${action}: public HTML must not embed the source reference`);
+      }
+      const owner = await projectFrom(await request(`/api/projects/${project.id}`));
+      assert.equal(owner.revision, saved.revision);
+      assert.deepEqual(owner.document, saved.document);
+      const exported = await request(`/api/projects/${project.id}/export`, 'POST', { format: 'json' });
+      assert.equal(exported.status, 200, await exported.clone().text());
+      assert.deepEqual(await exported.json(), saved.document, 'Owner JSON export retains the checkpoint and source asset');
+      const ownedBytes = await request(source.url); assert.equal(ownedBytes.status, 200);
+      assert.deepEqual(new Uint8Array(await ownedBytes.arrayBuffer()), sourceBytes);
     });
     await t.test('aggregate painting budget rejects oversized saves before changing the project', async () => {
       const large = await projectFrom(await request('/api/projects', 'POST', { name: 'Huge paint batch', kind: 'web' }), 201);

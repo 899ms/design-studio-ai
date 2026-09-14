@@ -1,4 +1,5 @@
 node_modules/
+bun.lock
 dist/
 .wrangler/
 .data/
@@ -12,6 +13,7 @@ coverage/
 *.log
 artifacts/
 tmp/
+/plans/
 public/studio-renderer.js
 public/studio-viewer.js
 data/

@@ -1,4 +1,9 @@
 import {OperationStatus} from './operation-status';
+import {AssetReplacement} from './asset-replacement';
+import {TimelineAudioPlayer} from './timeline-audio-player';
+import {timelineAudioCues} from '../shared/timeline-audio';
+import { CommunityPublishDialog } from './community-publish-dialog';
+import { useCommunityEnabled } from './community-client';
 import type {OperationJob} from '../shared/operation-jobs';
 import {startOperation,operationPath,runOperation} from './operation-client';
 import {operationJobSchema} from '../shared/operation-jobs';
@@ -155,6 +160,8 @@ export function Editor({
   onProject: (project: Project) => void;
   notify: (message: string) => void;
 }) {
+  const [communityPublish, setCommunityPublish] = useState<Project | null>(null);
+  const communityEnabled = useCommunityEnabled();
   const [brief, setBrief] = useState<DesignBrief | null>(null),
     [briefLoaded, setBriefLoaded] = useState(false),
     [briefManual, setBriefManual] = useState(false),
@@ -487,7 +494,13 @@ export function Editor({
   const manualSaving = useRef(false), syncUncertain = useRef(false);
   async function saveDocument<T>(path: string, body: unknown): Promise<T> {
     if (syncUncertain.current) throw new Error("Reload the project to reconcile the timed-out save before saving again.");
-    try { const input=operationJobSchema.parse({kind:'save',operationId:crypto.randomUUID(),input:body});return await (await runOperation(project.id,input,undefined)).json() as T; }
+    try {
+      const input=operationJobSchema.parse({kind:'save',operationId:crypto.randomUUID(),input:body});
+      const saved = await (await runOperation(project.id,input,undefined)).json() as T;
+      // Report only after the queued operation actually succeeds; queue acceptance alone is not a save.
+      void trackClient({ event: 'project_save', page: 'editor', projectId: project.id, outcome: 'success' });
+      return saved;
+    }
     catch (error) {
       if (error instanceof DocumentRequestTimeout && error.uncertainWrite) {
         syncUncertain.current = true;
@@ -641,7 +654,7 @@ export function Editor({
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   useEffect(() => {
-    if (!playing || !doc.timeline) return;
+    if (!playing || !doc.timeline || timelineAudioCues(page.nodes,doc.timeline.duration).length) return;
     let frame = 0;
     const start = performance.now() - time * 1000;
     const tick = () => {
@@ -656,7 +669,7 @@ export function Editor({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, doc.timeline?.duration]);
+  }, [playing, doc.timeline?.duration,page.nodes]);
   function removeNode() {
     void trackClient({ event: 'editor_action', action: 'delete', page: 'editor', projectId: initial.id });
     const roots = selectedRoots(docRef.current.pages[pageIndex], selection);
@@ -999,8 +1012,8 @@ export function Editor({
         `/api/projects/${project.id}/assets`,
         { method: "POST", body },
       );
-      await addAsset(asset);
-      notify("Asset imported. Save to keep its placement.");
+      change(d=>{if(!d.assets.some(a=>a.id===asset.id))d.assets.push(asset);});
+      notify("Asset added to the library. Select it to insert into the scene.");
     } catch (e) {
       setError(message(e));
     } finally {
@@ -1096,6 +1109,7 @@ export function Editor({
     setBusy(`Exporting ${format.toUpperCase()}`);
     setError("");
     setFailedExport("");
+    void trackClient({ event: 'export_start', page: 'editor', projectId: project.id });
     try {
       if (local) {
         if (doc.kind === "3d" && format === "png") {
@@ -1126,7 +1140,7 @@ export function Editor({
         }
         if (format === "google") setGoogleUrl(await googleSlides(project.id));
         else {
-          const request=operationJobSchema.parse({kind:'export',operationId:crypto.randomUUID(),input:{format,pageIndex,expectedRevision:revision,...(['png-sequence','spritesheet'].includes(format)?{start:frameStart,end:frameEnd,fps:frameFps}:{})}});
+          const request=operationJobSchema.parse({kind:'export',operationId:crypto.randomUUID(),input:{format,pageIndex,expectedRevision:revision,...(['png-sequence','spritesheet'].includes(format)?{start:frameStart,end:frameEnd,fps:frameFps}:format==='scene-angles'?{start:0,...(doc.timeline?{end:doc.timeline.duration,reviewSamples:5}:{})}:{})}});
           const response=await runOperation(project.id,request,undefined);
           if (!response.ok) {
             const data = (await response.json().catch(() => null)) as {
@@ -1151,8 +1165,10 @@ export function Editor({
           ? "Choose Save as PDF in the print dialog."
           : "Your export is ready.",
       );
+      void trackClient({ event: 'export_finish', page: 'editor', projectId: project.id, outcome: 'success' });
     } catch (e) {
       setError(message(e));
+      void trackClient({ event: 'export_finish', page: 'editor', projectId: project.id, outcome: 'error', errorCode: 'unexpected_error' });
       if (!local && !["google", "mp4", "motion", "png-sequence", "spritesheet", "scene-angles"].includes(format))
         setFailedExport(format);
     } finally {
@@ -1639,6 +1655,12 @@ export function Editor({
             <Redo2 size={18} />
           </button>
           <OperationStatus projectId={project.id}/>
+          {communityEnabled && <button className="button small" aria-label="Publish to Community" disabled={!!busy} onClick={() => void (async () => {
+            if (syncUncertain.current) { setError('Reload the project to reconcile the timed-out save before Community publication.'); return; }
+            if (documentFingerprint(docRef.current) !== documentFingerprint(projectRef.current.document)) await save();
+            if (syncUncertain.current || documentFingerprint(docRef.current) !== documentFingerprint(projectRef.current.document)) { setError('Save and reconcile all current edits before reviewing Community publication.'); return; }
+            setCommunityPublish(projectRef.current);
+          })()}>Publish to Community</button>}
           <span className="toolbar-divider" />
           <button className={`button small ${!preview ? "selected" : ""}`} aria-pressed={!preview} onClick={() => setPreview(false)}><Pencil size={15}/> Edit</button>
           <button
@@ -1861,6 +1883,7 @@ export function Editor({
                   }}
                 />
               </label>
+              <AssetReplacement doc={doc} onDocument={next=>change(d=>Object.assign(d,next))}/>
               <div className="asset-grid">
                 {doc.assets.map((asset) => (
                   <button
@@ -2258,7 +2281,8 @@ export function Editor({
                           {media.type === "video" ? (
                             <video
                               src={media.src}
-                              controls
+                              controls={!doc.timeline}
+                              muted={!!doc.timeline}
                               playsInline
                               style={{
                                 width: "100%",
@@ -2269,8 +2293,9 @@ export function Editor({
                           ) : (
                             <audio
                               src={media.src}
-                              controls
-                              style={{ width: "100%" }}
+                              controls={!doc.timeline}
+                              muted={!!doc.timeline}
+                              style={{ width: "100%",display:doc.timeline?'none':undefined }}
                             />
                           )}
                         </div>
@@ -2330,6 +2355,7 @@ export function Editor({
             )}
           </div>
           <button className="button" onClick={()=>setCharacterOpen(true)}>Character Motion</button>
+          {doc.timeline && <TimelineAudioPlayer nodes={page.nodes} duration={doc.timeline.duration} time={time} playing={playing} onTime={setTime} onEnded={()=>setPlaying(false)} onSeek={value=>{setTime(value);setPlaying(false);}} onChangeNode={(id,patch)=>change(d=>{const node=d.pages[pageIndex].nodes.find(n=>n.id===id);if(node)node.data={...node.data,...patch};})}/>}
           {doc.timeline && <TimelineEditor doc={doc} time={time} seek={value => { setTime(value); setPlaying(false); }} change={change} />}
           {doc.timeline && (
             <div className="timeline">
@@ -2496,7 +2522,7 @@ export function Editor({
             <div className="export-grid">
               {[
                 ...(['web', 'wireframe'].includes(doc.kind) ? [{ id: 'react', name: 'React prototype', detail: 'Runnable source + assets' }] : []),
-                ...(page.nodes.some(n=>n.type==='model3d')?[{id:'scene-angles',name:'Four angle views',detail:'PNG ZIP around the saved camera target'}]:[]),
+                ...(page.nodes.some(n=>n.type==='model3d')?[{id:'scene-angles',name:'Review scene motion',detail:'Four angles × five times, contact sheet & diagnostics'}]:[]),
                 ...(doc.characters?.length?[{id:'motion',name:'Motion package',detail:'Native rig + portable player'},{id:'png-sequence',name:'PNG sequence ZIP',detail:'Deterministic frames + manifest'},{id:'spritesheet',name:'Spritesheet ZIP',detail:'Atlas image + frame coordinates'}]:[]),
                 ...(doc.kind === '3d' ? [{ id: 'glb', name: 'GLB model', detail: 'Scene, materials & animation' }, { id: 'gltf', name: 'glTF scene', detail: 'Portable 3D source' }] : []),
                 { id: "png", name: "PNG image", detail: "Current page" },
@@ -2607,6 +2633,7 @@ export function Editor({
           </div>
         </Modal>
       )}
+      {communityPublish && <CommunityPublishDialog project={communityPublish} accountId={accountId} onClose={() => setCommunityPublish(null)}/>}
       {shareUrl && (
         <Modal
           title="Your design is out in the world"

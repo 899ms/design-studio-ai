@@ -4,18 +4,33 @@ import { mkdir } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 async function pane(page: Page, name: string) { const nav = page.locator('.mobile-editor-nav'); if (await nav.isVisible()) await nav.getByRole('button', { name, exact: true }).click(); }
 
-test('main navigation remains available on guide and documentation', async ({ page }, info) => {
+// Community is deployment-gated; every deployment renders the rest in this order.
+const workspaceNavigation = ['Workspace', 'Templates', 'Design systems'];
+const documentationNavigation = ['Activity', 'Documentation', 'Guide'];
+
+test('main navigation keeps its order on the workspace, guide and documentation', async ({ page }, info) => {
   await mkdir('plans/260910-1813-studio-feedback/reports', { recursive: true });
   await page.goto('/');
   await expect(page.locator('.creation-section').getByRole('heading', { level: 1 })).toBeVisible();
   await page.screenshot({ path: `plans/260910-1813-studio-feedback/reports/home-${info.project.name}.png` });
-  for (const route of ['/guide', '/docs']) {
+  for (const route of ['/', '/guide', '/docs']) {
     await page.goto(route);
     const nav = page.getByRole('navigation', { name: 'Main navigation', exact: true });
-    await expect(nav.getByRole('link', { name: 'Templates', exact: true })).toBeVisible();
+    const communityEnabled = (await (await page.request.get('/api/config')).json()).community?.enabled === true;
+    await expect(nav.getByRole('link')).toHaveText([...workspaceNavigation, ...(communityEnabled ? ['Community'] : []), ...documentationNavigation]);
     await expect(nav.getByRole('link', { name: 'Design systems', exact: true })).toHaveAttribute('href', '/design-systems');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   }
+});
+test('a failed configuration request does not hide the enabled Community link', async ({ page }) => {
+  const communityEnabled = (await (await page.request.get('/api/config')).json()).community?.enabled === true;
+  test.skip(!communityEnabled, 'Community is disabled on this deployment');
+  let configRequests = 0;
+  // The workspace reads /api/config from more than one caller; block the initial requests so only a retry can reveal the link.
+  await page.route('**/api/config', route => { configRequests += 1; return configRequests <= 2 ? route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }) : route.continue(); });
+  await page.goto('/');
+  await expect(page.getByRole('navigation', { name: 'Main navigation', exact: true }).getByRole('link', { name: 'Community', exact: true })).toBeVisible();
+  expect(configRequests).toBeGreaterThan(2);
 });
 test('project, editor tabs, preview and component parameters survive navigation', async ({ page, baseURL }) => {
   const doc = createDocument('web', 'Feedback component'); doc.theme.fonts = { heading: 'Arial', body: 'Arial' };
@@ -46,7 +61,11 @@ test('motion space playback, collapsible panes, and real saved thumbnails', asyn
   await page.keyboard.press('Space'); await expect(page.getByRole('button', { name: 'Play timeline', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Collapse timeline', exact: true }).click(); await expect(page.locator('.motion-content')).toBeHidden();
   await page.getByRole('button', { name: 'Expand timeline', exact: true }).click(); await expect(page.locator('.motion-content')).toBeVisible();
-  if (await page.locator('.pane-controls').isVisible()) {
+  // Desktop keeps frame-level pane controls; the compact layout (<=760px) hides them and navigates panels instead.
+  const paneControls = page.locator('.pane-controls');
+  if (['mobile', 'webkit'].includes(info.project.name)) await expect(paneControls).toBeHidden();
+  else {
+    await expect(paneControls).toBeVisible();
     await page.getByRole('button', { name: 'Collapse properties', exact: true }).click(); await expect(page.locator('.inspector')).toBeHidden();
     await page.getByRole('button', { name: 'Expand properties', exact: true }).click(); await expect(page.locator('.inspector')).toBeVisible();
   }

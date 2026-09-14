@@ -16,6 +16,7 @@ const compilation = await build({
   stdin: {
     contents: `import React from 'react';
 import { renderToString, renderToStaticMarkup } from 'react-dom/server';
+export { publicMetadata, stripPublicMetadata } from './src/shared/public-metadata.ts';
 import { DocsApp, documentationSections, documentationEndpoints, documentationCommands, documentationHref } from './src/app/documentation.tsx';
 import { GuideApp } from './src/app/guide.tsx';
 export const sections = documentationSections.map(({ id, title, description }) => ({ id, title, description, path: documentationHref(id) }));
@@ -75,19 +76,21 @@ function markdown(html, pagePath = "/") {
   return portable(text.replace(/\n{3,}/g, '\n\n').trim()) + '\n';
 }
 function page(path, title, description, markup, type = 'TechArticle') {
-  let html = template
-    .replace(/<title>[\s\S]*?<\/title>/i, `<title>${escape(title)} · Design Studio AI</title>`)
-    .replace(/<meta\s+[^>]*(?:name="description"|property="og:[^"]+"|name="twitter:[^"]+")[^>]*>/gi, '')
-    .replace(/<script\b[^>]*type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<noscript\b[^>]*data-public-docs[^>]*>[\s\S]*?<\/noscript>/gi, '')
-    .replace(/<link\s+[^>]*rel="canonical"[^>]*>/gi, '');
+  const indexable = !['/templates', '/design-systems', '/activity'].includes(path);
+  let html = content.stripPublicMetadata(template)
+    .replace(/<noscript\b[^>]*data-public-docs[^>]*>[\s\S]*?<\/noscript>/gi, '');
   const rootStart = html.indexOf('<div id="root">');
   const rootEnd = html.lastIndexOf('</div>');
   if (rootStart < 0 || rootEnd < rootStart) throw new Error('Expected a root div in the built application shell.');
   html = html.slice(0, rootStart) + `<div id="root">${portable(markup)}</div>` + html.slice(rootEnd + 6);
   const css = cssFiles.filter(file => file.startsWith(path.startsWith('/docs') ? 'documentation-' : path === '/guide' ? 'guide-' : 'index-')).filter(file => !html.includes(`/assets/${file}`)).map(file => `<link rel="stylesheet" href="/assets/${escape(file)}">`).join('\n');
-  const jsonLd = JSON.stringify({ '@context': 'https://schema.org', '@type': type, headline: title, description, url: absolute(path), inLanguage: 'en', isPartOf: { '@type': 'WebSite', name: 'Design Studio AI', url: origin }, license: `${repositoryUrl}/blob/main/LICENSE` }).replaceAll('<', '\\u003c');
-  const metadata = `<meta name="description" content="${escape(description)}"><link rel="canonical" href="${escape(absolute(path))}"><meta property="og:type" content="website"><meta property="og:title" content="${escape(title)} · Design Studio AI"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(absolute(path))}"><meta name="twitter:card" content="summary"><script type="application/ld+json">${jsonLd}</script>${css}<noscript data-public-docs><style>.docs-sidebar{display:flex!important;position:static!important;height:auto!important}.docs-search,.docs-mobile-toggle,.docs-code button,.guide-brief button,.guide-brief-heading label,.appearance-picker{display:none!important}</style></noscript>`;
+  const breadcrumbs = path === '/' ? undefined : [
+    { name: 'Home', path: '/' },
+    ...(path.startsWith('/docs/') ? [{ name: 'Documentation', path: '/docs' }] : []),
+    { name: title, path },
+  ];
+  const metadata = content.publicMetadata({ origin, path, title: `${title} · Design Studio AI`, description, type, indexable, breadcrumbs })
+    + `${css}<noscript data-public-docs><style>.docs-sidebar{display:flex!important;position:static!important;height:auto!important}.docs-search,.docs-mobile-toggle,.docs-code button,.guide-brief button,.guide-brief-heading label,.appearance-picker{display:none!important}</style></noscript>`;
   return html.replace('</head>', `${metadata}</head>`);
 }
 const repositoryUrl = 'https://github.com/bestagentkits/design-studio-ai';
@@ -117,7 +120,7 @@ await write('llms.txt', index);
 await write('llms-full.txt', `${index}\n---\n\n${records.map(record => `Source: ${absolute(record.path)}\n\n${record.body}`).join('\n---\n\n')}\n---\n\nSource: ${absolute('/guide')}\n\n${guideMarkdown}`);
 const publicPaths = ['/', '/guide', ...content.sections.map(section => section.path)];
 await write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${publicPaths.map(path => `  <url><loc>${escape(absolute(path))}</loc></url>`).join('\n')}\n</urlset>\n`);
-await write('robots.txt', `User-agent: *\nAllow: /\nDisallow: /api/auth/\nDisallow: /api/projects\nDisallow: /api/assets/\nDisallow: /api/providers\nDisallow: /api/tokens\nDisallow: /oauth/\nDisallow: /mcp\nDisallow: /published/\nDisallow: /*?settings=\n\nSitemap: ${absolute('/sitemap.xml')}\n`);
+await write('robots.txt', `User-agent: *\nAllow: /\nDisallow: /api/auth/\nDisallow: /api/projects\nDisallow: /api/assets/\nDisallow: /api/providers\nDisallow: /api/tokens\nDisallow: /oauth/\nDisallow: /mcp\nDisallow: /published/\nDisallow: /community/saved\nDisallow: /community/publishing\nDisallow: /community/impact\nDisallow: /community/moderation\nDisallow: /community?\nDisallow: /*?settings=\n\nSitemap: ${absolute('/sitemap.xml')}\n`);
 const homeFallback = `<main class="public-home-fallback"><header><p>DESIGN STUDIO AI</p><h1>A design workspace for people and agents.</h1><p>${escape(summary)}</p><nav><a href="/guide">Beginner guide</a> · <a href="/docs">Documentation</a> · <a href="/docs/api">API reference</a> · <a href="${repositoryUrl}">MIT source</a></nav></header><section><h2>From a clear brief to a useful artifact</h2><p>Choose a template, describe the audience and outcome, inspect the live preview, refine objects and themes, then export or publish an intentional snapshot.</p><h2>One structured document</h2><p>Use REST, the dsa CLI, network MCP with API keys or OAuth, or supported browser WebMCP. Atomic revisions protect concurrent human and agent edits.</p><h2>Your tools, your hosting</h2><p>Bring your own text, image, speech, music, or video provider keys. Run on Cloudflare or self-host using Docker. Template selection and manual editing work without provider credentials.</p></section></main>`;
 await write('index.html', page('/', 'Agent-first design workspace', summary, homeFallback, 'WebPage'));
 console.log(`Generated ${publicPaths.length} public HTML pages, ${records.length + 3} Markdown files, llms indexes, sitemap, and robots for ${origin}.`);

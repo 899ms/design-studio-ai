@@ -30,6 +30,7 @@ This reference follows the current [CLI source](../packages/cli/src/dsa.ts) and 
 | `brief get/put/interview/approve` | Persisted interactive questions, answers, scope and explicit version-bound approval |
 | `observability summary/events/trace` | Owner-scoped activity, provider usage, and correlated spans; global reads require configured operator authorization |
 | `projects check` | Read-only preflight hints with exact layer IDs; inspect the actual preview too |
+| `projects inspect ID`, `projects overview` | Private saved-page, project contact-sheet, and workspace-cover PNGs with revision and pagination metadata |
 | `projects import/export`, `render` | Canonical JSON import; authenticated cloud export; offline JSON/HTML/SVG rendering |
 | `assets list/upload/download` | Authenticated asset storage; node placement is a separate document edit |
 | `generate` | Real provider document proposal; no implicit save |
@@ -45,6 +46,33 @@ This reference follows the current [CLI source](../packages/cli/src/dsa.ts) and 
 | `api METHOD /api/path` | Same-origin REST escape hatch; JSON input from file/stdin |
 
 All option details are available through command `--help`. Document and operation files accept `--file -` for stdin. The default output is JSON; document/export/template content is raw when sent to stdout. `--output` writes the artifact and returns JSON metadata. Errors are JSON on stderr. Exit codes are 0 success, 1 input/API/conflict, 2 auth, 3 network/invalid response, and 4 local runtime/file errors.
+
+## Visual inspection
+
+Use visual inspection to see saved pages, slides, views, boards, or scenes before judging the result. It renders private images without publishing, calling an AI provider, or changing the document or brief. Save browser edits and confirm the returned document revision first: these images never include unsaved canvas changes. Deterministic `inspect_design` / `projects check` findings remain a separate quality aid.
+
+The [shared inspection contract](../src/shared/visual-inspection.ts) owns request limits and metadata. Discover `visualInspection` and `workspaceInspection` through `/api/schema`, or read `dsa projects inspect --help` and `dsa projects overview --help` in the installed CLI.
+
+| Surface | Project page/contact sheet | Owner workspace covers |
+| --- | --- | --- |
+| REST | `POST /api/projects/{id}/inspect` | `POST /api/projects/inspect` |
+| Network MCP | `inspect_project` | `inspect_workspace` |
+| Browser WebMCP | `studio_api_post_projects_id_inspect` | `studio_api_post_projects_inspect` |
+| CLI | `dsa projects inspect ID --output review.png` | `dsa projects overview --output-dir review` |
+
+REST returns `scope`, `source: saved`, `total`, `offset`, `nextOffset`, `items`, and PNG `images`. Each item identifies the project, kind, saved revision, page ID/index/name, original dimensions, sampled time, image index and pixel bounds within that image. MCP/WebMCP return this metadata as text alongside actual image content blocks. Browser inputs use `parameters: {id}` and a `body` matching REST. CLI writes PNGs and replaces base64 with `images[].path` and `bytes` in stdout JSON; a failed API request creates no image files. Workspace filenames use `workspace-OFFSET-IMAGE_INDEX.png` and repeat requests replace those files.
+
+Browser inspection tools are available in the signed-in workspace and editor when WebMCP is supported. Open-document editing tools still require the editor; visual inspection always uses saved server state.
+
+```sh
+dsa projects inspect PROJECT_ID --mode overview --revision OBSERVED_REVISION --output pages.png
+dsa projects inspect PROJECT_ID --mode page --page 0 --revision OBSERVED_REVISION --time 1.5 --output page.png
+dsa projects overview --output-dir workspace-review
+```
+
+Project inspection defaults to an overview of six pages. Page mode accepts either a saved `pageId` (`--page-id`) or zero-based `pageIndex` (`--page`), never both; omitting both selects the first page. Overview/workspace requests use `offset` and `limit`, and callers must follow non-null `nextOffset` to inspect the remaining items. A workspace overview covers the first page of each owned project in ID order. Its revisions describe individual project snapshots, not one atomic workspace snapshot; concurrent project creation/deletion can change offset pagination. Empty results contain no images or items.
+
+Open the returned PNG with your host's image-viewing capability, or actually examine the MCP/WebMCP image blocks, before claiming visual review. A contact sheet is for composition and coverage; inspect individual pages for text fitting and fine details. Sample relevant motion times and review playback separately; one frame cannot prove animation, sound, responsiveness, or cross-browser behavior. Use observed revision checks to keep a review tied to the intended saved content. Rendering, invalid selection and stale-revision errors are explicit; resolve them before reporting inspection success. See the installable skill's [visual review workflow](../skills/design-studio-ai/references/visual-inspection.md).
 
 ## Activity, usage, and traces
 
@@ -90,7 +118,9 @@ A design system can also be authored as a portable folder — `manifest.json` (i
 
 ## Capability boundaries
 
-The CLI's `projects export` requests real file bytes for JSON, HTML, SVG, PNG, PDF, PPTX, WebM, MP4, React ZIP, GLB, and glTF from `/api/projects/:id/export`. Binary downloads require `--output` (or `--out`). Raster, motion and 3D formats require a configured Cloudflare/self-host browser renderer; missing configuration and unavailable encoders return errors. Optional `--revision` ensures the server exports the inspected revision, and `--page` selects a zero-based page where supported. React packages a runnable frontend prototype without a business backend. GLB/glTF preserve supported geometry, textures, skinning and sampled animation. Cloud rendering embeds owned assets; remote media must be imported first. Motion exports are capped at 60 seconds and MP4 requires encoder support. PowerPoint preserves editable text/primitives and rasterizes complex nodes.
+The CLI's `projects export` requests real file bytes from `/api/projects/:id/export`; discover formats and fields through `/api/schema` and installed command help. Binary downloads require `--output` (or `--out`). Raster, motion and 3D formats require a configured Cloudflare/self-host browser renderer; missing configuration and unavailable encoders return errors. Optional `--revision` ensures the server exports the inspected revision, and `--page` selects a zero-based page where supported. React packages a runnable frontend prototype without a business backend. GLB/glTF preserve supported geometry, textures, skinning and sampled animation. Cloud rendering embeds owned assets; remote media must be imported first. Motion exports are capped at 60 seconds and MP4 requires encoder support. Browser and cloud motion exports share timeline audio cue timing and mixing. PowerPoint preserves editable text/primitives and rasterizes complex nodes.
+
+For 3D review, REST export and MCP `export_project` accept `format:"scene-angles"`, `start`, optional `end` and `reviewSamples` (2–25, default 5). CLI uses `--format scene-angles --start 0 --end 4 --review-samples 5 --output review.zip`. Without `end`, this preserves the four static PNG filenames; with `end`, it renders four angles at each sampled time plus a contact sheet and diagnostics. `reviewSamples` differs from the `samples` field on geometry scans/camera fitting and the `fps` field for frame archives. `format:"editable-scene"` additionally requires the imported model's `nodeId` (CLI `--node`) and returns canonical JSON with a hidden original-GLB checkpoint; export does not save it. See [3D characters](3d-characters.md#imported-animation-and-editable-interchange) for conversion limits and the separate revision-checked write.
 
 Offline `render` supports JSON/HTML/SVG and preserves asset references without fetching private media. Its 3D representation is static; server HTML export can include the trusted interactive 3D/timeline viewer, while cloud raster export uses real WebGL rendering. Google Slides requires real authorization and supports native text/shapes/HTTPS images, rejecting unsupported complex nodes and private image URLs.
 
@@ -100,9 +130,9 @@ Network MCP lives at `/mcp` with the server's advertised protocol versions, API-
 
 ## Implementation decisions and verification
 
-The CLI is the scoped agentization deliverable in [release phase](../plans/2026-09-07-bootstrap-design-studio-ai/phase-04-integration-release.md). Curated command families cover common workflows; the explicit API escape hatch covers new REST endpoints. Structured operation arrays provide bounded batch edits without arbitrary code execution. Tokens remain stateless, requests reject redirects, and error output redacts the application token.
+The CLI is the scoped agentization deliverable in [release phase](https://github.com/bestagentkits/design-studio-ai/blob/1a23d4a4a4ca4c14c6c15f2ae7318004a908ce2b/plans/2026-09-07-bootstrap-design-studio-ai/phase-04-integration-release.md). Curated command families cover common workflows; the explicit API escape hatch covers new REST endpoints. Structured operation arrays provide bounded batch edits without arbitrary code execution. Tokens remain stateless, requests reject redirects, and error output redacts the application token.
 
-CLI tests live in [tests/cli.test.ts](../tests/cli.test.ts); follow the build prerequisites in [repository verification guidance](../AGENTS.md#run-the-appropriate-checks). They build and execute the distributable in real subprocesses, inspect schema/template output, and exercise authenticated project editing against the SQLite-backed handler. Renderer/server tests cover actual binary export. External provider and Google success require separate credential-dependent checks. Release evidence belongs in the [finalization report](../plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md).
+CLI tests live in [tests/cli.test.ts](../tests/cli.test.ts); follow the build prerequisites in [repository verification guidance](../AGENTS.md#run-the-appropriate-checks). They build and execute the distributable in real subprocesses, inspect schema/template output, and exercise authenticated project editing against the SQLite-backed handler. Renderer/server tests cover actual binary export. External provider and Google success require separate credential-dependent checks. Release evidence belongs in the [finalization report](https://github.com/bestagentkits/design-studio-ai/blob/1a23d4a4a4ca4c14c6c15f2ae7318004a908ce2b/plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md).
 
 Build the complete installable skill archive with `npm run pack:skill`. The [packaging script](../scripts/package-skill.mjs) includes the entrypoint and all design-kind references in `dist/design-studio-ai-skill.zip`.
 
@@ -131,8 +161,22 @@ See [character motion](character-motion.md) and discover current operation schem
 ## 3D authoring
 
 Use `dsa scene schema`, `scene inspect`, and revision-checked `scene command` (preview by default, `--apply` to save). WebMCP provides `studio_scene_command` and `studio_inspect_scene`; network MCP provides `author_scene` and `inspect_scene`. See [3D characters](3d-characters.md) for coordinates, operation boundaries, rigging and export review.
+
+The open-editor tools `studio_imported_model` inventory or preview/apply editable GLB conversion, and `studio_frame_scene_shot` preview/apply animated-subject framing with optional portrait/square duplication. They are WebMCP tools; network clients use existing document/operation writes and editable-scene export. `scene.importedClips`, named-bone wing/jaw commands, page lights/fog/bloom/emitters, camera `safeFrame` and timeline audio cue fields all belong to the shared document and scene-command schemas. Read `/api/schema` before composing payloads and preserve nested fields when replacing `scene` or `data`.
+
+Asset upload adds a library entry only; insert an observed asset explicitly. Shared `replace-asset` accepts existing `assetId` and `replacementId` of the same MIME media kind and updates document references while retaining placements/timing and both assets. Use the ordinary revision-checked patch route, MCP `patch_design`, CLI `projects document patch`, or local `studio_apply_operations`; inspect the replacement's clips and media duration afterward.
 ## Persistent project covers
 
 Project summaries include `thumbnailUrl` (current saved revision) and `thumbnailRevision` (latest completed cover or null). GET `/api/projects/{id}/thumbnail?revision=N` returns a private PNG, or 202 with `Retry-After: 2` while rendering is busy. MCP `get_project_thumbnail`, WebMCP `studio_api_get_projects_id_thumbnail`, and `dsa projects thumbnail ID --revision N --output cover.png` use the same cache. A 202 is pending, not a completed download; retry after the indicated delay. Only the two latest completed covers are retained. Cloud render asset/import limits apply; no provider call occurs.
 
 See [durable operation jobs](operation-jobs.md) for save/export recovery, result retention and Cloudflare queue provisioning.
+
+## Community sharing
+
+Discover `community_capabilities` through network MCP or `studio_community_capabilities` on Community pages. The [shared operation inventory](../src/shared/community-endpoints.ts) owns REST, MCP, WebMCP and `dsa community` command parity. Use `dsa community schema` and installed command help before composing requests. See [Community](community.md) for preflight/consent, pinned versions, portable files, exact retries and moderation boundaries. Browser Community tools are registered separately from editor tools to keep host schemas bounded.
+
+Community preflight checks PNG-sequence and spritesheet frame budgets before accepting publication. Explicit `start`, `end` and `fps` values are preserved; `render_budget_exceeded` reports a usable frame-rate limit or requests a smaller range/page. Review any quality or range change with the person, then submit a fresh preflight. The browser recommends a visible frame-archive FPS for the full animation; API clients must choose their own options. A queued receipt is not publication success: wait for `succeeded` before announcing that a design is live.
+
+`community_generate_profile` / `studio_community_generate_profile` / `dsa community generate-profile --file request.json` uses the owner's configured text provider to suggest display name, handle and bio. Omitting `provider` uses the first configured text connection. Only supplied draft fields and optional `prompt` are sent; this incurs provider usage and never saves the profile. Show the returned `suggestion` to the person before the separate revision-checked `set-profile` operation. Availability is checked again at save time.
+
+For listing Title, Description and Tags, use `community_generate_metadata` / `studio_community_generate_metadata` / `dsa community generate-metadata --file request.json`. Supply the owned `projectId` and observed `expectedProjectRevision`; optional fields are `provider`, `title`, `description`, `tags` and `prompt`. The server sends a bounded summary of visible saved text/structure plus these fields, checks the revision before and after generation, and returns `{suggestion, provider, projectRevision}` without persistence. Review the suggestion with the person before preflight using the approved metadata. Generation does not grant publication consent; a revision conflict requires rereading and reviewing the saved project.

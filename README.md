@@ -77,10 +77,10 @@ Set `ENCRYPTION_KEY` and the public `APP_URL` in your environment or a local Com
 
 Create an API token in Settings and inject `DESIGN_STUDIO_API_KEY` into the agent environment. `DESIGN_STUDIO_URL` defaults to the live studio. Network MCP is at `https://studio.agentkit.best/mcp`, with OAuth discovery on the same origin.
 
-Install the published [v0.4.0 release](https://github.com/bestagentkits/design-studio-ai/releases/tag/v0.4.0) CLI tarball:
+Install the published [v0.4.3 release](https://github.com/bestagentkits/design-studio-ai/releases/tag/v0.4.3) CLI tarball:
 
 ```sh
-npm install -g https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.0/bestagentkits-design-studio-ai-0.4.0.tgz
+npm install -g https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.3/bestagentkits-design-studio-ai-0.4.3.tgz
 dsa --help
 ```
 
@@ -90,13 +90,13 @@ The package is **not published to the npm registry**. To build and install from 
 cd packages/cli
 npm pack
 cd ../..
-npm install -g ./packages/cli/bestagentkits-design-studio-ai-0.4.0.tgz
+npm install -g ./packages/cli/bestagentkits-design-studio-ai-0.4.3.tgz
 dsa --help
 dsa schema
 dsa projects list
 ```
 
-The release also includes the [installable agent skill ZIP](https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.0/design-studio-ai-skill.zip). [Agent documentation](docs/agents.md) covers revisions, secret handling, exports, and skill installation.
+The release also includes the [installable agent skill ZIP](https://github.com/bestagentkits/design-studio-ai/releases/download/v0.4.3/design-studio-ai-skill.zip). [Agent documentation](docs/agents.md) covers revisions, secret handling, exports, and skill installation.
 
 ## Verify and contribute
 
@@ -113,4 +113,6 @@ Run `npm run typecheck`, `npm test`, and `npm run build`. `npm run test:e2e` sta
 - WebMCP is experimental and feature-detected; other browsers retain the human UI and network MCP.
 - Upstream dependency audit findings remain; see [security notes](docs/deployment.md#dependency-security).
 
-[Product brief](docs/product-brief.md) records the requested scope. [Release verification](plans/2026-09-07-bootstrap-design-studio-ai/reports/release-v020.md) records the observed checks and limitations for v0.2.0. [Initial delivery evidence](plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md) remains available for v0.1.0.
+[Product brief](docs/product-brief.md) records the requested scope. [Release verification](https://github.com/bestagentkits/design-studio-ai/blob/1a23d4a4a4ca4c14c6c15f2ae7318004a908ce2b/plans/2026-09-07-bootstrap-design-studio-ai/reports/release-v020.md) records the observed checks and limitations for v0.2.0. [Initial delivery evidence](https://github.com/bestagentkits/design-studio-ai/blob/1a23d4a4a4ca4c14c6c15f2ae7318004a908ce2b/plans/2026-09-07-bootstrap-design-studio-ai/reports/finalization.md) remains available for v0.1.0.
+
+Discover and share reusable designs in [Community](https://studio.agentkit.best/community). [Community documentation](docs/community.md) covers publishing, portable downloads, independent remixes, contextual search and moderation.

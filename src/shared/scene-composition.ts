@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {createSceneRenderer} from './scene-effects';
 import type { DesignDocument } from './schema';
 import { interpolateNode, renderSvg, resolveColor } from './render';
 import { resolveLayout } from './layout';
@@ -6,7 +7,8 @@ import { resolveLayout } from './layout';
 /** One WebGL context paints transparent scene segments between ordered 2D layers. */
 export function mountSceneComposition(host: HTMLElement, doc: DesignDocument, index: number, renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
   const page = doc.pages[index], layers: { ids: Set<string>; canvas?: HTMLCanvasElement; svg?: HTMLDivElement }[] = [];
-  const nodes = resolveLayout(page).nodes.filter(n => n.type !== 'group');
+  const painter=createSceneRenderer(renderer,scene,camera,page);
+  const nodes = resolveLayout(page).nodes.filter(n => n.type !== 'group' && n.type !== 'audio');
   for (const node of nodes) {
     const model = node.type === 'model3d';
     let layer = layers.at(-1);
@@ -38,7 +40,7 @@ export function mountSceneComposition(host: HTMLElement, doc: DesignDocument, in
           models.forEach((object, i) => { object.visible = visible[i] && layer.ids.has(object.userData.nodeId); });
           helpers.forEach((object, i) => { object.visible = helperVisible[i] && (object.userData.compositionBackground ? firstSceneLayer : layer.ids.has(object.userData.compositionNode)); });
           firstSceneLayer = false;
-          renderer.render(scene, camera);
+          painter.draw();
           const canvas = layer.canvas, source = renderer.domElement;
           if (canvas.width !== source.width || canvas.height !== source.height) { canvas.width = source.width; canvas.height = source.height; }
           const context = canvas.getContext('2d')!; context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(source, 0, 0);
@@ -69,5 +71,5 @@ export function mountSceneComposition(host: HTMLElement, doc: DesignDocument, in
     const modelIndex = ordered.findIndex(n => n.id === modelId);
     return ordered.slice(modelIndex + 1).reverse().find(n => n.type !== 'model3d' && n.type !== 'group' && n.visible !== false && (n.opacity ?? 1) > 0 && px >= n.x && px <= n.x + n.width && py >= n.y && py <= n.y + n.height)?.id;
   };
-  return { draw, pickHit, pickOverlay, dispose: () => { for (const layer of layers) (layer.canvas ?? layer.svg)?.remove(); renderer.domElement.style.cssText = original; } };
+  return { draw, pickHit, pickOverlay, dispose: () => { painter.dispose();for (const layer of layers) (layer.canvas ?? layer.svg)?.remove(); renderer.domElement.style.cssText = original; } };
 }

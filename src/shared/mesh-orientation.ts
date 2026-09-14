@@ -1,7 +1,9 @@
 import type { MeshData } from './design-capabilities';
+import { refreshMeshShading } from './mesh-shading';
 
 /** Orient a closed sampled surface through adjacency; local field gradients can be ambiguous at thin intersections. */
 export function orientClosedMesh(mesh: MeshData) {
+  let changed = false;
   const edges = new Map<string, { face: number; direction: number }[]>();
   const neighbors = Array.from({ length: mesh.indices.length / 3 }, () => [] as { face: number; factor: number }[]);
   for (let face = 0; face < neighbors.length; face++) for (let edge = 0; edge < 3; edge++) {
@@ -34,6 +36,8 @@ export function orientClosedMesh(mesh: MeshData) {
     }
     for (const face of component) if (orientation[face] * (volume < 0 ? -1 : 1) < 0) {
       const i = face * 3; [mesh.indices[i + 1], mesh.indices[i + 2]] = [mesh.indices[i + 2], mesh.indices[i + 1]];
+      changed = true;
     }
   }
+  if (changed) refreshMeshShading(mesh);
 }

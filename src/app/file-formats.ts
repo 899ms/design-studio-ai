@@ -1,4 +1,6 @@
+import { createTimelineAudioEngine, timelineAudioCues, type TimelineAudioEngine } from '../shared/timeline-audio';
 import { publicCreativeProjection } from '../shared/public-creative-projection';
+import { upgradeDocument } from '../shared/document-upgrade';
 import {documentSchema} from '../shared/schema';
 import type { DesignDocument, DesignNode } from "../shared/schema";
 import { renderHtml, renderSvg } from "../shared/render";
@@ -87,7 +89,7 @@ export async function exportDesign(
     );
     return;
   }
-  const doc = await portableDocument(publicCreativeProjection(input), ['react', 'glb', 'gltf', 'html'].includes(format)),
+  const doc = await portableDocument(publicCreativeProjection(upgradeDocument(input)), ['react', 'glb', 'gltf', 'html'].includes(format)),
     page = doc.pages[pageIndex]!;
   if (format === 'react') {
     const [{ createReactArchive }, response] = await Promise.all([import('../shared/react-export'), fetch('/studio-react-runtime.json')]);
@@ -102,7 +104,7 @@ export async function exportDesign(
   }
   const { captureExportPage } = await import('./export-page');
   const { usesDom } = await import('./document-view');
-  const capture = async (index: number, time = 0) => usesDom(doc.pages[index]) || doc.pages[index].scene || doc.pages[index].nodes.some(n => n.scene)
+  const capture = async (index: number, time = 0) => doc.kind === '3d' || usesDom(doc.pages[index]) || doc.pages[index].scene || doc.pages[index].nodes.some(n => n.scene)
     ? captureExportPage(doc, index, time) : rasterize(renderSvg(doc, index, time), doc.pages[index].width, doc.pages[index].height);
   if (format === "html") {
     const interactive = doc.kind === 'slides' || doc.timeline || doc.pages.some(p => usesDom(p) || p.scene || p.nodes.some(n => n.type === 'model3d'));
@@ -202,23 +204,30 @@ export async function exportDesign(
     canvas.width = page.width;
     canvas.height = page.height;
     const context = canvas.getContext("2d")!,
-      stream = canvas.captureStream(doc.timeline.fps),
-      recorder = new MediaRecorder(stream, { mimeType });
+      stream = canvas.captureStream(doc.timeline.fps);
+    let audio: TimelineAudioEngine | undefined, recorder: MediaRecorder | undefined;
+    let audioError: Error | undefined;
     const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size) chunks.push(e.data);
-    };
-    const done = new Promise<void>((resolve, reject) => {
-      recorder.onstop = () => resolve();
-      recorder.onerror = () => reject(new Error("Video encoding failed."));
-    });
     try {
+      const cues = timelineAudioCues(page.nodes, doc.timeline.duration);
+      if (cues.length) {
+        audio = await createTimelineAudioEngine(cues, { audible: false, onError: error => { audioError = error; } });
+        for (const track of audio.stream.getAudioTracks()) stream.addTrack(track);
+      }
+      recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      const done = new Promise<void>((resolve, reject) => {
+        recorder!.onstop = () => resolve();
+        recorder!.onerror = () => reject(new Error("Video encoding failed."));
+      });
       const first = await capture(pageIndex, 0);
       context.drawImage(first, 0, 0);
       recorder.start();
+      await audio?.play(0, doc.timeline.duration);
       const start = performance.now();
-      while ((performance.now() - start) / 1000 < doc.timeline.duration) {
-        const time = Math.min(
+      while (audio ? audio.currentTime() < doc.timeline.duration : (performance.now() - start) / 1000 < doc.timeline.duration) {
+        if (audioError) throw audioError;
+        const time = audio ? audio.currentTime() : Math.min(
           doc.timeline.duration,
           (performance.now() - start) / 1000,
         );
@@ -233,8 +242,9 @@ export async function exportDesign(
       await done;
       download(`${name}.webm`, new Blob(chunks, { type: mimeType }), mimeType);
     } finally {
-      if (recorder.state !== "inactive") recorder.stop();
+      if (recorder && recorder.state !== "inactive") recorder.stop();
       stream.getTracks().forEach((track) => track.stop());
+      await audio?.dispose();
     }
     return;
   }

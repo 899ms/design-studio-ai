@@ -73,7 +73,7 @@ export function Inspector({
   }
   return (
     <aside className="inspector">{storedNode?.component && <ComponentInspector doc={doc} key={storedNode.id} node={storedNode} update={update}/>}
-      {doc.kind === '3d' && <Suspense fallback={null}><SceneInspector onTexture={onTexture} doc={doc} page={page} node={storedNode?.type === 'model3d' ? storedNode : undefined} update={update} pageUpdate={pageUpdate}/></Suspense>}
+      {doc.kind === '3d' && <Suspense fallback={null}><SceneInspector onDocument={next=>change(d=>Object.assign(d,next))} onTexture={onTexture} doc={doc} page={page} node={storedNode?.type === 'model3d' ? storedNode : undefined} update={update} pageUpdate={pageUpdate}/></Suspense>}
       <div
         className="panel-tabs"
         onKeyDown={(event) => navigateButtonGroup(event)}
