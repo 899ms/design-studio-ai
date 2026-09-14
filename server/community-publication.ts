@@ -4,6 +4,7 @@ import { communityProjection } from '../src/shared/community-projection';
 import { documentSchema, type DesignDocument } from '../src/shared/schema';
 import { ownedDocumentAssetIds } from '../src/shared/document-asset-references';
 import { normalizeCommunityText } from '../src/shared/community-search';
+import { PORTABLE_JSON_MEDIA_BUDGET, RENDER_MEDIA_BUDGET } from '../src/shared/export-contract';
 import { frameExportBudget, frameExportBudgetMessage } from '../src/shared/frame-export-budget';
 import { communityProfile } from './community-profiles';
 import { communityJobReceipt, dispatchCommunityJob, serializeCommunityJob, type CommunityJobRow } from './community-jobs';
@@ -33,7 +34,11 @@ async function inspectPublication(env:Bindings,userId:string,input:unknown) {
  if(document.pages.some(p=>p.nodes.some(n=>n.type==='model3d'))&&!document.pages.some(p=>p.nodes.some(n=>n.character)))availableFormats.push('glb','gltf','scene-angles');
  if(document.timeline||document.characters?.length)availableFormats.push('motion','webm','mp4','png-sequence','spritesheet');
  for(const format of value.formats)if(!availableFormats.includes(format.format))fail(400,'unsupported_export','This design does not support one of the selected download formats.');
- const preflight:CommunityPreflight={digest,document,disclosure:projected!.disclosure,kind:document.kind,pageCount:document.pages.length,assetBytes,license:'CC-BY-4.0',formats:['package',...value.formats.map(f=>f.format)],availableFormats,issues:[]};
+ // Rendering embeds every referenced asset, including the Community cover, so both media budgets are checked here.
+ const issues:CommunityPreflight['issues']=[];
+ if(assetBytes>RENDER_MEDIA_BUDGET)issues.push({code:'render_media_budget',message:'Rendering this design, including its Community cover, embeds more than 30 MiB of media. Reduce media size before publishing.'});
+ if(value.formats.some(options=>options.format==='json')&&assetBytes>PORTABLE_JSON_MEDIA_BUDGET)issues.push({code:'json_media_budget',message:'The JSON download embeds owned media and exceeds its 20 MiB budget. Deselect JSON or keep the Studio project package download.'});
+ const preflight:CommunityPreflight={digest,document,disclosure:projected!.disclosure,kind:document.kind,pageCount:document.pages.length,assetBytes,license:'CC-BY-4.0',formats:['package',...value.formats.map(f=>f.format)],availableFormats,issues};
  return {preflight,value,assetSources,attribution:attributionRow?JSON.parse(attributionRow.attribution) as CommunityAttribution:null};
 }
 export async function preflightCommunity(env:Bindings,userId:string,input:unknown) {return (await inspectPublication(env,userId,input)).preflight;}
@@ -42,6 +47,8 @@ export async function publishCommunity(env:Bindings,userId:string,input:unknown,
  const profile=await communityProfile(env,userId);if(!profile)fail(409,'profile_required','Choose your public creator profile before publishing.');
  const {operationId,digest,license,acceptLicense,confirmPublic,expectedListingRevision,...metadata}=value;
  const inspected=await inspectPublication(env,userId,metadata);if(inspected.preflight.digest!==digest)fail(409,'preflight_changed','Public content or options changed. Review a fresh preflight.');
+ // Preflight issues are blocking for every client, not only the dialog that disables its publish button.
+ const blocking=inspected.preflight.issues[0];if(blocking)fail(413,blocking.code,blocking.message);
  const existing=listingId?await ownedCommunityListing(env,userId,listingId):await env.DB.prepare('SELECT * FROM community_listings WHERE source_project_id=? AND user_id=?').bind(value.projectId,userId).first<CommunityListingRow>();
  if(existing?.source_project_id!==undefined&&existing.source_project_id!==value.projectId)fail(400,'source_mismatch','A listing can only release its original source project.');
  if(existing?.deleted)fail(409,'listing_deleted','This listing was permanently removed.');if(existing?.suppressed)fail(409,'listing_hidden','A moderator has hidden this listing.');

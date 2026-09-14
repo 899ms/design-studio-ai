@@ -2,7 +2,7 @@ import { publicCreativeProjection } from '../src/shared/public-creative-projecti
 import { upgradeDocument } from '../src/shared/document-upgrade';
 import type { InspectionRenderOptions } from '../src/shared/visual-inspection';
 
-import {exportOptionsSchema as optionsSchema} from '../src/shared/export-contract';
+import {exportOptionsSchema as optionsSchema, PORTABLE_JSON_MEDIA_BUDGET, RENDER_MEDIA_BUDGET} from '../src/shared/export-contract';
 import { createMotionArchive } from '../src/shared/motion-export';
 import { frameExportBudget, frameExportBudgetMessage } from '../src/shared/frame-export-budget';
 import { updateEvent } from './observability-store';
@@ -91,7 +91,7 @@ export async function renderProjectExport(c: Context<Env>, projectId: string, in
 }
 
 /** Render only a document and asset resolver already authorized by the calling service. */
-export async function renderSnapshotExport(bindings: Bindings, name: string, document: DesignDocument, input: unknown, resolveAsset: SnapshotAssetResolver, hooks: {thumbnail?:boolean;inspection?:InspectionRenderOptions;thumbnailSelection?:{pageIndex:number;time:number;focalX:number;focalY:number};onBytes?:(bytes:number)=>void;beforeRender?:()=>Promise<void>} = {}) {
+export async function renderSnapshotExport(bindings: Bindings, name: string, document: DesignDocument, input: unknown, resolveAsset: SnapshotAssetResolver, hooks: {thumbnail?:boolean;inspection?:InspectionRenderOptions;thumbnailSelection?:{pageIndex:number;time:number;focalX:number;focalY:number};jsonAssetsAsDataUrls?:boolean;onBytes?:(bytes:number)=>void;beforeRender?:()=>Promise<void>} = {}) {
   const options=optionsSchema.parse(input), thumbnail=hooks.thumbnail ?? false;
   let doc=documentSchema.parse(structuredClone(document));
   if (!doc.pages[options.pageIndex]) fail(400, 'invalid_page', 'This page does not exist.');
@@ -106,7 +106,30 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
   if (['glb', 'gltf'].includes(options.format) && !doc.pages[options.pageIndex].nodes.some(node => node.type === 'model3d')) fail(400, 'unsupported_export', 'Scene export requires a 3D object on the selected page.');
   const extension = options.format==='editable-scene'?'json':['react','motion','png-sequence','spritesheet','scene-angles'].includes(options.format) ? 'zip' : options.format;
   const headers = { 'Content-Type': mimeTypes[options.format], 'Content-Disposition': `attachment; filename="${name.replace(/[^a-zA-Z0-9_-]/g, '_')}.${extension}"`, 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' };
-  if (options.format === 'json') { const output = JSON.stringify(doc, null, 2); hooks.onBytes?.(new TextEncoder().encode(output).length); return new Response(output, { headers }); }
+  const embedded = new Map<string, string>(), embeddedSizes = new Map<{bytes:number;message:string}, number>();
+  /** Owned media becomes a data URL only inside the produced artifact; the validated document keeps its references. */
+  const embed = async (url: string, budget: {bytes:number;message:string}): Promise<string> => {
+    if (!url.startsWith('/api/assets/') && !url.startsWith('/api/community/')) return url;
+    if (embedded.has(url)) return embedded.get(url)!;
+    const asset = await resolveAsset(url), embeddedSize = (embeddedSizes.get(budget) ?? 0) + asset.bytes.byteLength;
+    embeddedSizes.set(budget, embeddedSize);
+    if (embeddedSize > budget.bytes) fail(413, 'export_too_large', budget.message);
+    const result = `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
+    embedded.set(url, result);
+    return result;
+  };
+  const renderBudget = {bytes: RENDER_MEDIA_BUDGET, message: 'Embedded media exceeds 30 MiB; reduce the export assets.'};
+  const jsonBudget = {bytes: PORTABLE_JSON_MEDIA_BUDGET, message: 'The JSON download embeds owned media and exceeds its 20 MiB budget. Download the Studio project package or reduce media size.'};
+  if (options.format === 'json') {
+    // The portable JSON download is the one artifact whose embedded bytes may exceed the stored-document limit.
+    if (hooks.jsonAssetsAsDataUrls) {
+      for (const page of doc.pages) for (const node of page.nodes) if (node.src) node.src = await embed(node.src, jsonBudget);
+      for (const asset of doc.assets) asset.url = await embed(asset.url, jsonBudget);
+    }
+    const output = JSON.stringify(doc, null, 2);
+    hooks.onBytes?.(new TextEncoder().encode(output).length);
+    return new Response(output, { headers });
+  }
   if (!['html', 'svg', 'react'].includes(options.format)) {
     const selectedPages = hooks.inspection ? hooks.inspection.pageIndices.map(index => doc.pages[index]) : options.format === 'pdf' || options.format === 'pptx' ? doc.pages : [doc.pages[options.pageIndex]];
     const renderNodes = selectedPages.flatMap(page => page.nodes.filter(node => node.visible !== false));
@@ -117,20 +140,8 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
     const media = renderNodes.flatMap(node => [node.src, ...(['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const).map(key=>doc.assets.find(asset=>asset.id===node.scene?.material?.[key])?.url)]);
     if ([...media,...characterUrls].some(url => url && !url.startsWith('/api/assets/') && !url.startsWith('/api/community/') && !url.startsWith('data:'))) fail(400, 'import_asset_required', 'Import external media into the project before cloud rendering. Cloud renderers have no external network access.');
   }
-  let embeddedSize = 0;
-  const embedded = new Map<string, string>();
-  const embed = async (url: string): Promise<string> => {
-    if (!url.startsWith('/api/assets/') && !url.startsWith('/api/community/')) return url;
-    if (embedded.has(url)) return embedded.get(url)!;
-    const asset = await resolveAsset(url);
-    embeddedSize += asset.bytes.byteLength;
-    if (embeddedSize > 30 * 1024 * 1024) fail(413, 'export_too_large', 'Embedded media exceeds 30 MB; reduce the export assets.');
-    const result = `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
-    embedded.set(url, result);
-    return result;
-  };
-  for (const page of doc.pages) for (const node of page.nodes) if (node.src) node.src = await embed(node.src);
-  for (const asset of doc.assets) asset.url = await embed(asset.url);
+  for (const page of doc.pages) for (const node of page.nodes) if (node.src) node.src = await embed(node.src, renderBudget);
+  for (const asset of doc.assets) asset.url = await embed(asset.url, renderBudget);
   if (options.format === 'svg') { const output = renderSvg(doc, options.pageIndex); hooks.onBytes?.(new TextEncoder().encode(output).length); return new Response(output, { headers }); }
   if (options.format === 'html') { const output = await interactiveSnapshotHtml(bindings, doc); hooks.onBytes?.(new TextEncoder().encode(output).length); return new Response(output, { headers }); }
   if (options.format === 'motion') {

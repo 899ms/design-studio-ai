@@ -11,6 +11,18 @@ import type { PublicationInput } from './community-publication';
 import { ApiError, fail, id, now } from './security';
 import { communityMilestones } from '../src/shared/community-taxonomy';
 import { communityEnabled } from './community-access';
+import { z } from 'zod';
+/** A raw Zod issue dump is not actionable; the dialog, receipt and agent clients show this instead. */
+export function communityFailureMessage(error:unknown):string {
+ if(error instanceof z.ZodError){
+  const [first,...rest]=error.issues;
+  if(!first)return 'The public design failed final validation.';
+  const path=first.path.length?` (${first.path.join('.')})`:'';
+  const more=rest.length?` and ${rest.length} more issue${rest.length===1?'':'s'}`:'';
+  return `The public design failed final validation${path}: ${first.message}${more}.`;
+ }
+ return error instanceof Error?error.message:'Community operation failed.';
+}
 const textBytes=(text:string)=>new TextEncoder().encode(text);
 async function updateStage(env:Bindings,job:CommunityJobRow,lease:string,stage:string) {await assertCommunityLease(env,job.id,lease);await env.DB.prepare("UPDATE community_jobs SET stage=?,updated_at=? WHERE id=? AND lease=? AND status='running'").bind(stage,now(),job.id,lease).run();}
 async function existingFile(env:Bindings,jobId:string,fileId:string,lease:string) {await assertCommunityLease(env,jobId,lease);const row=await env.DB.prepare("SELECT * FROM community_files WHERE job_id=? AND id=? AND status='ready'").bind(jobId,fileId).first<CommunityFileRow>();if(!row)return null;const object=await env.ASSETS_BUCKET.get(row.storage_key);if(!object)fail(409,'artifact_unavailable','A committed artifact is missing.');const bytes=new Uint8Array(await object!.arrayBuffer());if(await communityChecksum(bytes)!==row.checksum)fail(409,'artifact_corrupt','Stored artifact checksum does not match.');await assertCommunityLease(env,jobId,lease);return {row,bytes};}
@@ -80,7 +92,7 @@ export async function processCommunityJob(env:Bindings,jobId:string) {
  try{if(job.kind==='publish')await processPublish(env,job,lease);else if(job.kind==='remix'||job.kind==='import')await processCopy(env,job,lease);else if(job.kind==='cleanup'){
  await reconcileCommunityStorage(env);const pending=await env.DB.prepare("SELECT 1 FROM community_files WHERE listing_id=? AND status!='deleted' LIMIT 1").bind(job.listing_id).first();await env.DB.prepare("UPDATE community_jobs SET status=?,stage=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=?").bind(pending?'queued':'succeeded',pending?'cleaning':'completed',now(),jobId,lease).run();return !pending;
  }else fail(400,'invalid_job','Unknown Community operation.');}
- catch(error){if(error instanceof ApiError&&error.code==='lease_lost')return false;if(job.kind==='cleanup'||error instanceof ApiError&&error.code==='community_paused'){await env.DB.prepare("UPDATE community_jobs SET status='queued',stage=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=?").bind(job.kind==='cleanup'?'cleaning':'awaiting-enable',now(),jobId,lease).run();return false;}const detail=error instanceof ApiError?{code:error.code,message:error.message}:{code:'community_build_failed',message:error instanceof Error?error.message:'Community operation failed.'};await env.DB.batch([env.DB.prepare("UPDATE community_jobs SET status='failed',stage='failed',error=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=? AND status='running'").bind(JSON.stringify(detail),now(),jobId,lease),env.DB.prepare("UPDATE community_listings SET pending_job_id=NULL WHERE pending_job_id=? AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='failed')").bind(jobId,jobId),env.DB.prepare("UPDATE community_versions SET status='failed' WHERE listing_id=? AND version=? AND status='building' AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='failed')").bind(job.listing_id,job.version,jobId)]);}
+ catch(error){if(error instanceof ApiError&&error.code==='lease_lost')return false;if(job.kind==='cleanup'||error instanceof ApiError&&error.code==='community_paused'){await env.DB.prepare("UPDATE community_jobs SET status='queued',stage=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=?").bind(job.kind==='cleanup'?'cleaning':'awaiting-enable',now(),jobId,lease).run();return false;}const detail=error instanceof ApiError?{code:error.code,message:error.message}:{code:'community_build_failed',message:communityFailureMessage(error)};await env.DB.batch([env.DB.prepare("UPDATE community_jobs SET status='failed',stage='failed',error=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=? AND status='running'").bind(JSON.stringify(detail),now(),jobId,lease),env.DB.prepare("UPDATE community_listings SET pending_job_id=NULL WHERE pending_job_id=? AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='failed')").bind(jobId,jobId),env.DB.prepare("UPDATE community_versions SET status='failed' WHERE listing_id=? AND version=? AND status='building' AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='failed')").bind(job.listing_id,job.version,jobId)]);}
  await reconcileCommunityStorage(env);
  return true;
 }
