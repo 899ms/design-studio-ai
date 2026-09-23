@@ -90,6 +90,7 @@ export async function saveDocument(
   expectedBriefRevision?: number,
   operationId?: string,
   receiptIdentity?: { key: string; hash: string },
+  receiptDetails?: Record<string, unknown>,
 ) {
   const row = await projectRow(c, projectId);
   // Diagnose a stale v1 client before validating fields that only exist in v2.
@@ -129,7 +130,7 @@ export async function saveDocument(
     );
   const committed = serializeProject({ ...row, document: JSON.stringify(parsed), name: parsed.name, revision: row.revision + 1, updated_at: parsed.metadata.updatedAt }, origin(c));
   const results = await c.env.DB.batch([statement, ...(identity ? [
-    c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(committed), Date.now()),
+    c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(receiptDetails ? { ...committed, receiptDetails } : committed), Date.now()),
     c.env.DB.prepare("DELETE FROM creative_save_receipts WHERE project_id=? AND user_id=? AND operation_id NOT LIKE 'job-%' AND operation_id NOT IN (SELECT operation_id FROM creative_save_receipts WHERE project_id=? AND user_id=? ORDER BY revision DESC LIMIT 8)").bind(row.id, owner(c), row.id, owner(c)),
   ] : [])]);
   const result = results[0] as { meta?: { changes?: number } };
@@ -537,13 +538,15 @@ projectRoutes.get('/:id/scene', async c => {
 });
 /** Shared by the scene route and durable scene operations; a receipt identity makes an applied command replay-safe. */
 export async function applySceneRequest(c:Context<Env>,projectId:string,input:z.infer<typeof sceneRequestSchema>,receiptIdentity?:{key:string;hash:string}){
-  const sceneResponse=(revision:number,before:DesignDocument|undefined,next:DesignDocument)=>{const report=inspectScene(next,input.pageId);return input.responseMode==='summary'?{revision,preview:input.preview,...(before?documentChanges(before,next):{}),...summarizeScene(report,next)}:{revision,preview:input.preview,...report};};
-  if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt)return sceneResponse(receipt.revision,undefined,documentSchema.parse(receipt.document));}
+  const sceneResponse=(revision:number,changes:ReturnType<typeof documentChanges>|undefined,next:DesignDocument)=>{const report=inspectScene(next,input.pageId);return input.responseMode==='summary'?{revision,preview:input.preview,...changes,...summarizeScene(report,next)}:{revision,preview:input.preview,...report};};
+  // A replayed job has no base document, so the change summary recorded at commit is reused.
+  if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt)return sceneResponse(receipt.revision,receipt.receiptDetails as ReturnType<typeof documentChanges>|undefined,documentSchema.parse(receipt.document));}
   const row=await projectRow(c,projectId);
   if(row.revision!==input.expectedRevision)fail(409,'conflict','Project revision changed. Read and reconcile before applying geometry.');
   const before=documentSchema.parse(JSON.parse(row.document));let next:DesignDocument;try{next=mutateDocument(before,[{op:'scene-command',pageId:input.pageId,command:input.command}]);}catch(error){if(error instanceof z.ZodError)throw error;fail(400,'invalid_scene_command',error instanceof Error?error.message:'Scene command failed');throw error;}
-  const revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity)).revision;
-  return sceneResponse(revision,before,next);
+  // Only summary responses use the change list; skipping it spares serializing large meshes twice.
+  const changes=input.responseMode==='summary'?documentChanges(before,next):undefined,revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity,receiptIdentity&&changes)).revision;
+  return sceneResponse(revision,changes,next);
 }
 projectRoutes.post('/:id/scene', async c => c.json(await applySceneRequest(c,c.req.param('id'),sceneRequestSchema.parse(await c.req.json()))));
 projectRoutes.post('/:id/paint', async c => c.json({ project: await executePaintingCommand(c, c.req.param('id'), await c.req.json()) }));

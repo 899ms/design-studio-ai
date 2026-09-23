@@ -56,7 +56,8 @@ function placeCamera(camera: THREE.PerspectiveCamera, pose: ReturnType<typeof ca
 }
 /** Look-at point of an animated camera, kept outside userData so GLB exports stay unchanged. */
 export const cameraTargets = new WeakMap<THREE.Camera, [number, number, number]>();
-const physicalKeys = ['transmission', 'thickness', 'ior', 'clearcoat', 'clearcoatRoughness'] as const;
+/** Material fields that switch a node to MeshPhysicalMaterial. */
+export const physicalMaterialKeys = ['transmission', 'thickness', 'ior', 'clearcoat', 'clearcoatRoughness'] as const;
 export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
   const page = doc.pages[pageIndex], config = page.scene ?? defaultScene;
   const scene = new THREE.Scene(); scene.background = new THREE.Color(resolveColor(page.background, doc.theme));
@@ -80,13 +81,16 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
       try{animateImportedScene(object,n,time);}catch(error){disposeScene(object);throw error;}
       // Imported meshes retain authored materials until the user supplies overrides.
       if (materialConfig) {
+        // Physical overrides need MeshPhysicalMaterial; imported standard materials are upgraded in place, keeping their maps.
+        const physical=physicalMaterialKeys.some(key=>materialConfig[key]!==undefined),upgraded=new Map<THREE.Material,THREE.MeshPhysicalMaterial>();
+        const upgrade=(material:THREE.Material)=>{if(!physical||!(material instanceof THREE.MeshStandardMaterial)||material instanceof THREE.MeshPhysicalMaterial)return material;let next=upgraded.get(material);if(!next){next=new THREE.MeshPhysicalMaterial();THREE.MeshStandardMaterial.prototype.copy.call(next,material);next.defines={STANDARD:'',PHYSICAL:''};material.dispose();upgraded.set(material,next);}return next;};
         const materials=new Set<THREE.MeshStandardMaterial>();
-        object.traverse(child=>{if(child instanceof THREE.Mesh)for(const material of Array.isArray(child.material)?child.material:[child.material])if(material instanceof THREE.MeshStandardMaterial)materials.add(material);});
+        object.traverse(child=>{if(child instanceof THREE.Mesh){child.material=Array.isArray(child.material)?child.material.map(upgrade):upgrade(child.material);for(const material of Array.isArray(child.material)?child.material:[child.material])if(material instanceof THREE.MeshStandardMaterial)materials.add(material);}});
         try{for(const material of materials)await applySceneMaterial(material,n,doc,true);}catch(error){disposeScene(object);throw error;}
       }
     }
     else {
-      const Material = physicalKeys.some(key => materialConfig?.[key] !== undefined) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+      const Material = physicalMaterialKeys.some(key => materialConfig?.[key] !== undefined) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
       const material = new Material({ vertexColors: !!n.scene?.mesh?.colors, color: resolveColor(materialConfig?.color ?? n.style?.fill ?? n.data?.color ?? '$accent', doc.theme), metalness: materialConfig?.metalness ?? Number(n.data?.metalness ?? .15), roughness: materialConfig?.roughness ?? Number(n.data?.roughness ?? .35), wireframe: materialConfig?.wireframe ?? false, side: materialConfig?.doubleSided ? THREE.DoubleSide : THREE.FrontSide, opacity: n.opacity ?? 1, transparent: materialConfig?.transparent ?? ((n.opacity ?? 1) < 1) });
       pendingMaterial = material;
       await applySceneMaterial(material,n,doc);

@@ -46,6 +46,16 @@ test('durable jobs preserve revisions, recover committed saves, isolate owners a
   const next=structuredClone(document);next.name='Later revision';await json(await request(base+'/document','PUT',{document:next,expectedRevision:saved.project.revision}));
   const exp=(await db.prepare('SELECT * FROM operation_jobs WHERE operation_id=?').bind('export-one').first<any>())!;await processOperation(env,exp.id);
   assert.equal((await json(await request(base+'/operations/export-one/result'))).name,'Committed once');
+  // A replayed summary-mode scene job has no base document, so it must return the change summary recorded at commit.
+  const scene=(await json(await request('/api/projects','POST',{name:'Scene job',kind:'3d'}),201)).project,sceneBase=`/api/projects/${scene.id}`,pageId=scene.document.pages[0].id;
+  const sceneJob={kind:'scene',operationId:'scene-one',input:{pageId,expectedRevision:scene.revision,responseMode:'summary',command:{action:'material',nodeId:scene.document.pages[0].nodes.find((n:any)=>n.type==='model3d').id,transmission:.5}}};
+  await json(await request(sceneBase+'/operations','POST',sceneJob),202);
+  const sceneRow=(await db.prepare('SELECT * FROM operation_jobs WHERE operation_id=?').bind('scene-one').first<any>())!;await processOperation(env,sceneRow.id);
+  const first=await json(await request(sceneBase+'/operations/scene-one/result'));assert.deepEqual(first.changedNodeIds,[sceneJob.input.command.nodeId]);
+  await db.prepare("UPDATE operation_jobs SET status='running',lease_until=0 WHERE id=?").bind(sceneRow.id).run();await processOperation(env,sceneRow.id);
+  const replayed=await json(await request(sceneBase+'/operations/scene-one/result'));
+  assert.deepEqual({revision:replayed.revision,pages:replayed.changedPageIds,nodes:replayed.changedNodeIds},{revision:first.revision,pages:first.changedPageIds,nodes:first.changedNodeIds});
+  await json(await request(sceneBase,'DELETE'));
   const keys=(await db.prepare('SELECT input_key,result_key FROM operation_jobs').all<any>()).results.flatMap(r=>[r.input_key,r.result_key]);
   await json(await request(base,'DELETE'));for(const key of keys.filter(Boolean))assert.equal(await env.ASSETS_BUCKET.get(key),null);
  }finally{db.native.close();await rm(directory,{recursive:true,force:true});}

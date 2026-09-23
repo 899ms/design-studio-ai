@@ -9,6 +9,8 @@ const quadrupedLandmarksSchema = z.object({ hips: vectorSchema, chest: vectorSch
 const wingLandmarksSchema = z.object({ shoulder: vectorSchema, elbow: vectorSchema, wrist: vectorSchema, fingers: z.array(z.object({ base: vectorSchema, tip: vectorSchema })).min(3).max(5) });
 export const wingedLandmarksSchema = quadrupedLandmarksSchema.extend({ jaw: vectorSchema, jawTip: vectorSchema, wingLeft: wingLandmarksSchema, wingRight: wingLandmarksSchema });
 const materialPatchSchema = sceneObjectSchema.shape.material.unwrap().pick({ color: true, metalness: true, roughness: true, emissive: true, emissiveIntensity: true, transmission: true, thickness: true, ior: true, clearcoat: true, clearcoatRoughness: true, bloom: true, transparent: true, doubleSided: true, wireframe: true });
+/** Every material field also accepts null, which removes it so the renderer default applies again. */
+const nullablePatch = <S extends z.ZodRawShape>(shape: S) => Object.fromEntries(Object.entries(shape).map(([key, schema]) => [key, (schema instanceof z.ZodOptional ? schema.unwrap() as z.ZodType : schema as z.ZodType).nullable().optional()])) as unknown as { [K in keyof S]: z.ZodOptional<z.ZodNullable<S[K] extends z.ZodOptional<infer Inner> ? Inner : S[K]>> };
 /** Partial page-level settings: a key set to null removes that setting. */
 const settingsPatch = z.record(z.string().max(40), z.unknown());
 export const sceneCommandSchema = z.discriminatedUnion('action', [
@@ -18,7 +20,7 @@ export const sceneCommandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('emitter'), id, preset: z.enum(emitterPresetNames).optional(), ...sceneEmitterSchema.omit({ id: true }).partial().shape }),
   z.object({ action: z.literal('remove-emitter'), id }),
   z.object({ action: z.literal('terrain'), outputId: id, shape: z.enum(['plane', 'mountain']).default('mountain'), size: z.tuple([finite.min(.1).max(10000), finite.min(.1).max(10000)]).default([20, 20]), resolution: z.number().int().min(4).max(128).default(64), height: finite.min(0).max(1000).default(4), seed: z.number().int().min(0).max(2147483647).default(1), octaves: z.number().int().min(1).max(6).default(4), roughness: finite.min(.1).max(.9).default(.5), position: vectorSchema.default([0, 0, 0]), color: z.string().max(80).default('#DDE7F0') }),
-  z.object({ action: z.literal('material'), nodeId: id, opacity: finite.min(0).max(1).optional(), ...materialPatchSchema.shape }),
+  z.object({ action: z.literal('material'), nodeId: id, opacity: finite.min(0).max(1).optional(), ...nullablePatch(materialPatchSchema.shape) }),
   z.object({action:z.literal('checkpoint'),nodeId:id,outputId:id}),
   z.object({action:z.literal('restore-mesh'),nodeId:id,sourceId:id}),
   z.object({action:z.literal('insert-loop'),nodeId:id,axis:z.enum(['x','y','z']),offset:finite}),

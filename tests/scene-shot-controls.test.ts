@@ -64,6 +64,29 @@ test('camera fitting includes animated bounds and requested safe margins', async
   for (const corner of boxCorners(box)) { const point = corner.project(camera); assert.ok(Math.abs(point.x) <= .7001 && Math.abs(point.y) <= .7001); }
 });
 
+test('camera fitting reframes each camera key to the motion around its time, along its own direction', async () => {
+  const doc = createDocument('3d', 'Keyed subject'), page = doc.pages[0];
+  page.width = 1920; page.height = 1080;
+  page.nodes = [{ id: 'moving', type: 'model3d', name: 'Moving sphere', x: 0, y: 0, width: 200, height: 200, scene: { position: [0, 0, 0] }, data: { geometry: 'sphere' } }];
+  const keys = [{ time: 0, position: [-3, 1, 3] as [number, number, number], target: [-3, 0, 0] as [number, number, number], ease: 'ease-out' as const }, { time: 1, position: [0, 2, 5] as [number, number, number], target: [0, 0, 0] as [number, number, number] }, { time: 2, position: [4, 2, 4] as [number, number, number], target: [3, 0, 0] as [number, number, number], fov: 30 }];
+  page.scene = { camera: { position: [0, 0, 8], target: [0, 0, 0], fov: 40, safeFrame: .1, keys }, ambient: 2, light: { position: [3, 4, 5], intensity: 4, color: '#ffffff' } };
+  doc.timeline = { duration: 2, fps: 30, tracks: [{ id: 'move', nodeId: 'moving', keyframes: [{ time: 0, values: { 'scene.position.x': -4 } }, { time: 2, values: { 'scene.position.x': 4 } }] }] };
+  const fitted = await fitSceneCamera(doc, page.id, ['moving'], 17), box = new Box3(new Vector3(...fitted.bounds.min), new Vector3(...fitted.bounds.max));
+  assert.equal(fitted.camera.keys?.length, 3);
+  const span = box.max.x - box.min.x, windows = [[box.min.x, box.min.x + span / 2], [box.min.x, box.max.x], [box.max.x - span / 2, box.max.x]];
+  fitted.camera.keys!.forEach((key, index) => {
+    const original = keys[index], { position, ...rest } = key, { position: before, ...kept } = original;
+    assert.deepEqual(rest, kept, 'time, target, fov and easing stay authored');
+    const direction = new Vector3(...position).sub(new Vector3(...key.target)), authored = new Vector3(...before).sub(new Vector3(...original.target));
+    assert.ok(direction.normalize().distanceTo(authored.normalize()) < 1e-9, 'the view direction is unchanged');
+    const camera = new PerspectiveCamera(key.fov ?? 40, page.width / page.height, .01, 10000); camera.position.fromArray(position); camera.lookAt(new Vector3(...key.target)); camera.updateMatrixWorld(true);
+    // The subject moves linearly, so a key's window between its neighbours covers half of the path at either end.
+    const window = box.clone(); window.min.x = windows[index][0] + .01; window.max.x = windows[index][1] - .01;
+    for (const corner of boxCorners(window)) { const point = corner.project(camera); assert.ok(Math.abs(point.x) <= .8001 && Math.abs(point.y) <= .8001, `key ${index} frames its window`); }
+    if (index !== 1) assert.ok(boxCorners(box).some(corner => Math.abs(corner.project(camera).x) > .8), 'an end key frames its own part of the path, not all of it');
+  });
+});
+
 test('environment and shot controls persist real settings at desktop and mobile widths', { timeout: 60000 }, async () => {
   const bundle = await build({ stdin: { contents: `
     import {createElement,useState} from 'react';import {createRoot} from 'react-dom/client';import {SceneInspector} from './src/app/scene-inspector';import {documentSchema} from './src/shared/schema';

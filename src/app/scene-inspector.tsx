@@ -1,6 +1,6 @@
 import { Camera, Sun, Palette, Move3D, Image, RotateCcw } from 'lucide-react';
 import type { DesignDocument, DesignNode, DesignPage } from '../shared/schema';
-import { defaultScene } from '../shared/scene-runtime';
+import { defaultScene, physicalMaterialKeys } from '../shared/scene-runtime';
 import { resolveColor } from '../shared/render';
 import { Field } from './ui';
 import {SceneImportControls} from './scene-import-controls';
@@ -36,6 +36,7 @@ export function SceneInspector({ doc, page, node, update, pageUpdate, onTexture,
       <SceneNumber label="Index of refraction" min={1} max={2.333} step={.01} value={material.ior ?? 1.5} change={ior => setMaterial({ ior })}/>
       <SceneNumber label="Clearcoat" max={1} step={.01} value={material.clearcoat ?? 0} change={clearcoat => setMaterial({ clearcoat })}/>
       <SceneNumber label="Clearcoat roughness" max={1} step={.01} value={material.clearcoatRoughness ?? 0} change={clearcoatRoughness => setMaterial({ clearcoatRoughness })}/>
+      {physicalMaterialKeys.some(key => material[key] !== undefined) && <button type="button" className="button small" onClick={() => { const standard = Object.fromEntries(Object.entries(material).filter(([key]) => !physicalMaterialKeys.includes(key as never))); update({ scene: { ...scene, material: Object.keys(standard).length ? standard : undefined } }); }}>Use standard material</button>}
     </div></details>
     <details open><summary><Image size={16}/>Color texture</summary><div className="scene-section">
       <Field label="Color texture"><select value={material.textureAssetId ?? ''} onChange={e => setMaterial({ textureAssetId: e.target.value || undefined })}><option value="">{node.src && !scene.mesh ? 'Original model texture' : 'None'}</option>{doc.assets.filter(asset => asset.mimeType.startsWith('image/')).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></Field>
