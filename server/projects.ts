@@ -15,6 +15,7 @@ import { ownedDocumentAssetIds, remapDocumentAssets } from '../src/shared/docume
 import {documentWriteSchema} from '../src/shared/document-write';
 import {characterEvolutionErrors} from '../src/shared/character-validation';
 import { inspectMotion, motionInspectionSchema } from '../src/shared/motion-inspection';
+import { documentChanges, projectSummary, responseModeSchema, summarizeScene } from '../src/shared/document-change-summary';
 import { updateEvent } from './observability-store';
 import { Hono } from "hono";
 import { z } from "zod";
@@ -373,16 +374,17 @@ projectRoutes.patch("/:id", async (c) => {
 projectRoutes.put("/:id/document", async (c) => {
   // The owned save service validates the canonical document after its version guard.
   const body = documentWriteSchema.extend({ document: z.unknown() }).parse(await c.req.json());
-  return c.json({
-    project: await saveDocument(
+  const before = body.responseMode === 'summary' ? documentSchema.parse(JSON.parse((await projectRow(c, c.req.param('id'))).document)) : undefined;
+  const project = await saveDocument(
       c,
       c.req.param("id"),
       body.document,
       body.expectedRevision,
       body.expectedBriefRevision,
       body.operationId,
-    ),
-  });
+    );
+  if (!before) return c.json({ project });
+  return c.json({ project: projectSummary(project), ...documentChanges(before, project.document) });
 });
 projectRoutes.delete("/:id", async (c) => {
   const row = await projectRow(c, c.req.param("id"));
@@ -529,17 +531,21 @@ export async function published(c: Context<Env>, slug: string) {
 projectRoutes.get('/:id/motion',async c=>{const row=await projectRow(c,c.req.param('id'));const input=motionInspectionSchema.parse(c.req.query());const doc=documentSchema.parse(JSON.parse(row.document));if(input.nodeId&&!doc.pages.some(p=>p.nodes.some(n=>n.id===input.nodeId&&n.character)))fail(404,'not_found','Unknown character instance');if(input.characterId&&!doc.characters?.some(x=>x.id===input.characterId))fail(404,'not_found','Unknown character');return c.json({revision:row.revision,...inspectMotion(documentSchema.parse(JSON.parse(row.document)),input)});});
 
 projectRoutes.get('/:id/scene', async c => {
-  const row=await projectRow(c,c.req.param('id')); const query=z.object({pageId:z.string().optional(),time:z.coerce.number().finite().min(0).max(3600).default(0)}).parse(c.req.query());
+  const row=await projectRow(c,c.req.param('id')); const query=z.object({pageId:z.string().optional(),time:z.coerce.number().finite().min(0).max(3600).default(0),detail:responseModeSchema}).parse(c.req.query());
   const doc=documentSchema.parse(JSON.parse(row.document));if(query.pageId&&!doc.pages.some(p=>p.id===query.pageId))fail(404,'not_found','Unknown page');
-  return c.json({revision:row.revision,...inspectScene(doc,query.pageId,query.time)});
+  const report=inspectScene(doc,query.pageId,query.time);return c.json({revision:row.revision,...(query.detail==='summary'?summarizeScene(report,doc):report)});
 });
-projectRoutes.post('/:id/scene', async c => {
-  const row=await projectRow(c,c.req.param('id')),input=sceneRequestSchema.parse(await c.req.json());
+/** Shared by the scene route and durable scene operations; a receipt identity makes an applied command replay-safe. */
+export async function applySceneRequest(c:Context<Env>,projectId:string,input:z.infer<typeof sceneRequestSchema>,receiptIdentity?:{key:string;hash:string}){
+  const sceneResponse=(revision:number,before:DesignDocument|undefined,next:DesignDocument)=>{const report=inspectScene(next,input.pageId);return input.responseMode==='summary'?{revision,preview:input.preview,...(before?documentChanges(before,next):{}),...summarizeScene(report,next)}:{revision,preview:input.preview,...report};};
+  if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt)return sceneResponse(receipt.revision,undefined,documentSchema.parse(receipt.document));}
+  const row=await projectRow(c,projectId);
   if(row.revision!==input.expectedRevision)fail(409,'conflict','Project revision changed. Read and reconcile before applying geometry.');
-  let next:DesignDocument;try{next=mutateDocument(documentSchema.parse(JSON.parse(row.document)),[{op:'scene-command',pageId:input.pageId,command:input.command}]);}catch(error){if(error instanceof z.ZodError)throw error;fail(400,'invalid_scene_command',error instanceof Error?error.message:'Scene command failed');throw error;}
-  const revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision)).revision;
-  return c.json({revision,preview:input.preview,...inspectScene(next,input.pageId)});
-});
+  const before=documentSchema.parse(JSON.parse(row.document));let next:DesignDocument;try{next=mutateDocument(before,[{op:'scene-command',pageId:input.pageId,command:input.command}]);}catch(error){if(error instanceof z.ZodError)throw error;fail(400,'invalid_scene_command',error instanceof Error?error.message:'Scene command failed');throw error;}
+  const revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity)).revision;
+  return sceneResponse(revision,before,next);
+}
+projectRoutes.post('/:id/scene', async c => c.json(await applySceneRequest(c,c.req.param('id'),sceneRequestSchema.parse(await c.req.json()))));
 projectRoutes.post('/:id/paint', async c => c.json({ project: await executePaintingCommand(c, c.req.param('id'), await c.req.json()) }));
 
 projectRoutes.get('/:id/scene/animation',async c=>{

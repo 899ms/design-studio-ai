@@ -3,15 +3,15 @@ import {version} from '../../package.json';
 import { clientEventSchema, telemetryQuerySchema } from './observability';
 import { communityEndpoints, type CommunityEndpoint } from './community-endpoints';
 export const apiEndpoints = [
-  { method: 'POST', path: '/api/projects/{id}/inspect', summary: 'See saved page/view/slide or paginated project contact sheet as PNG images with revision and page mapping; read-only', body: { mode: 'overview', offset: 0, limit: 6 } },
+  { method: 'POST', path: '/api/projects/{id}/inspect', summary: 'See saved page/view/slide or paginated project contact sheet as PNG images with revision and page mapping; page mode accepts a 3D camera; read-only', body: { mode: 'overview', offset: 0, limit: 6 } },
   { method: 'POST', path: '/api/projects/inspect', summary: 'See paginated private workspace project covers as PNG images with project IDs and revisions; read-only', body: { offset: 0, limit: 6 } },
   ...(communityEndpoints as readonly CommunityEndpoint[]).map(endpoint=>({method:endpoint.method,path:`/api/community${endpoint.path}`,summary:endpoint.summary,body:endpoint.body||endpoint.upload?{}:undefined})),
   {method:'GET',path:'/api/projects/{id}/scene/animation',summary:'Inspect complete animation; required pageId and optional start, end, samples (2–61) query',body:undefined},
-  {method:'POST',path:'/api/projects/{id}/operations',summary:'Start idempotent save/export job; reuse operationId and exact payload on uncertain response',body:{kind:'export',operationId:'unique-operation-id',input:{format:'glb',expectedRevision:1,pageIndex:0}}},
+  {method:'POST',path:'/api/projects/{id}/operations',summary:'Start idempotent save, scene or export job; reuse operationId and exact payload on uncertain response',body:{kind:'export',operationId:'unique-operation-id',input:{format:'glb',expectedRevision:1,pageIndex:0}}},
   {method:'GET',path:'/api/projects/{id}/operations/{operationId}',summary:'Read owner-scoped operation status, stage, revision and result URL',body:undefined},
   {method:'GET',path:'/api/projects/{id}/operations/{operationId}/result',summary:'Download completed operation result',body:undefined},
-  { method: 'GET', path: '/api/projects/{id}/scene', summary: 'Inspect 3D mesh topology, skin weights, skeleton and sampled pose; optional pageId and time query', body: undefined },
-  { method: 'POST', path: '/api/projects/{id}/scene', summary: 'Preview/apply revision-checked rig, wing/jaw motion and mesh commands; discover sceneCommands in schema', body: { pageId: 'page-id', expectedRevision: 1, preview: true, command: { action: 'convert', nodeId: 'model-id' } } },
+  { method: 'GET', path: '/api/projects/{id}/scene', summary: 'Inspect 3D mesh topology, skin weights, skeleton and sampled pose; optional pageId, time and detail=summary query', body: undefined },
+  { method: 'POST', path: '/api/projects/{id}/scene', summary: 'Preview/apply revision-checked rig, mesh, camera, environment and emitter commands; discover sceneCommands in schema', body: { pageId: 'page-id', expectedRevision: 1, preview: true, command: { action: 'convert', nodeId: 'model-id' } } },
   { method: 'GET', path: '/api/health', summary: 'Health', body: undefined },
   { method: 'GET', path: '/api/schema', summary: 'Document v1/v2 and shared operation schemas', body: undefined },
   { method: 'GET', path: '/api/catalog', summary: 'Templates, themes, blocks and generation prompts', body: undefined },
@@ -31,7 +31,7 @@ export const apiEndpoints = [
   { method: 'GET', path: '/api/projects/{id}', summary: 'Read a project', body: undefined },
   {method:'GET',path:'/api/projects/{id}/motion',summary:'Inspect character rigs, clips and sampled pose (characterId, nodeId, time query)',body:undefined},
   { method: 'POST', path: '/api/projects/{id}/paint', summary: 'Render an owned-layer stroke or fill; paintingCommand requires observed document revision, painting generation and an exact-retry operationId', body: { expectedRevision: 1, expectedGeneration: 0, operationId: 'unique-command-id', paintingId: 'painting', layerId: 'layer', action: { type: 'stroke', preset: 'bristle', size: 16, flow: .8, color: '#336699', points: [{ x: 20, y: 20, pressure: .5 }] } } },
-  { method: 'PUT', path: '/api/projects/{id}/document', summary: 'Save shared v1/v2 boards, diagrams, Elements and painting layers at the observed revision; painting saves accept exact-retry operationId', body: { expectedRevision: 1, document: {} } },
+  { method: 'PUT', path: '/api/projects/{id}/document', summary: 'Save shared v1/v2 boards, diagrams, Elements and painting layers at the observed revision; painting saves accept exact-retry operationId; responseMode summary returns changed IDs', body: { expectedRevision: 1, document: {} } },
   { method: 'POST', path: '/api/projects/{id}/merge', summary: 'Merge nonconflicting human and agent edits', body: { baseRevision: 1, base: {}, document: {} } },
   { method: 'GET', path: '/api/projects/{id}/changes', summary: 'Read current revision and changes', body: undefined },
   { method: 'GET', path: '/api/projects/{id}/checks', summary: 'Inspect design', body: undefined },

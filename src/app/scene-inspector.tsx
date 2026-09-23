@@ -29,6 +29,13 @@ export function SceneInspector({ doc, page, node, update, pageUpdate, onTexture,
       <Field label="Emissive color"><input aria-label="Emissive color" type="color" value={resolveColor(material.emissive??'#000000',doc.theme)} onChange={e=>setMaterial({emissive:e.target.value})}/></Field>
       <SceneNumber label="Emissive intensity" value={material.emissiveIntensity??1} max={20} change={emissiveIntensity=>setMaterial({emissiveIntensity})}/>
       <label className="component-check"><input type="checkbox" checked={material.wireframe ?? false} onChange={e => setMaterial({ wireframe: e.target.checked })}/>Wireframe</label><label className="component-check"><input type="checkbox" checked={material.doubleSided ?? false} onChange={e => setMaterial({ doubleSided: e.target.checked })}/>Double sided</label>
+      <label className="component-check"><input type="checkbox" checked={material.bloom ?? true} onChange={e => setMaterial({ bloom: e.target.checked ? undefined : false })}/>Glow in bloom</label>
+      <p className="small-copy">Transmission, clearcoat or IOR switch this object to a physical material for ice, glass and lacquer.</p>
+      <SceneNumber label="Transmission" max={1} step={.01} value={material.transmission ?? 0} change={transmission => setMaterial({ transmission })}/>
+      <SceneNumber label="Thickness" max={100} step={.1} value={material.thickness ?? 0} change={thickness => setMaterial({ thickness })}/>
+      <SceneNumber label="Index of refraction" min={1} max={2.333} step={.01} value={material.ior ?? 1.5} change={ior => setMaterial({ ior })}/>
+      <SceneNumber label="Clearcoat" max={1} step={.01} value={material.clearcoat ?? 0} change={clearcoat => setMaterial({ clearcoat })}/>
+      <SceneNumber label="Clearcoat roughness" max={1} step={.01} value={material.clearcoatRoughness ?? 0} change={clearcoatRoughness => setMaterial({ clearcoatRoughness })}/>
     </div></details>
     <details open><summary><Image size={16}/>Color texture</summary><div className="scene-section">
       <Field label="Color texture"><select value={material.textureAssetId ?? ''} onChange={e => setMaterial({ textureAssetId: e.target.value || undefined })}><option value="">{node.src && !scene.mesh ? 'Original model texture' : 'None'}</option>{doc.assets.filter(asset => asset.mimeType.startsWith('image/')).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></Field>
@@ -51,6 +58,6 @@ export function SceneInspector({ doc, page, node, update, pageUpdate, onTexture,
       <Field label="Light color"><input type="color" value={settings.light.color} onChange={e => pageUpdate({ scene: { ...settings, light: { ...settings.light, color: e.target.value } } })}/></Field>
     </div></details>
     <SceneShotControls key={page.id} doc={doc} page={page} pageUpdate={pageUpdate} onDocument={onDocument}/>
-    <SceneEnvironmentControls key={`environment-${page.id}`} page={page} duration={doc.timeline?.duration} pageUpdate={pageUpdate}/>
+    <SceneEnvironmentControls key={`environment-${page.id}`} page={page} assets={doc.assets} duration={doc.timeline?.duration} pageUpdate={pageUpdate}/>
   </>}</div>;
 }

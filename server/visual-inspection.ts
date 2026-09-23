@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { documentSchema } from '../src/shared/schema';
 import { inspectionLayout, visualInspectionSchema, workspaceInspectionSchema, type VisualInspectionInput, type VisualInspectionResult } from '../src/shared/visual-inspection';
 import { renderProjectExport } from './exports';
+import { defaultScene } from '../src/shared/scene-runtime';
 import { projectRow, type ProjectRow } from './projects';
 import { fail, owner, rateLimit } from './security';
 import type { Env } from './types';
@@ -17,8 +18,17 @@ async function inspectProject(c: Context<Env>, row: ProjectRow, options: VisualI
   if (options.mode === 'overview' && options.offset >= doc.pages.length) fail(400, 'invalid_offset', 'Select an offset inside the project pages.');
   const pageIndices = options.mode === 'page' ? [pageIndex] : doc.pages.map((_, index) => index).slice(options.offset, options.offset + options.limit);
   const render = { ...options, pageIndices };
+  let snapshot = row;
+  if (options.camera) {
+    const target = doc.pages[pageIndex];
+    if (!target.scene && doc.kind !== '3d' && !target.nodes.some(node => node.type === 'model3d')) fail(400, 'invalid_camera', 'A camera override needs a page with a 3D scene or 3D objects.');
+    // Render a clone with the requested pose; camera keys would otherwise replace it at the sampled time.
+    const page = structuredClone(doc.pages[pageIndex]), scene = page.scene ?? structuredClone(defaultScene);
+    page.scene = { ...scene, camera: { ...scene.camera, ...options.camera, keys: undefined } };
+    snapshot = { ...row, document: JSON.stringify({ ...doc, pages: doc.pages.map((p, i) => i === pageIndex ? page : p) }) };
+  }
   const layout = inspectionLayout(doc, render);
-  const response = await renderProjectExport(c, row.id, { format: 'png', pageIndex: pageIndices[0], expectedRevision: row.revision }, false, row, render);
+  const response = await renderProjectExport(c, row.id, { format: 'png', pageIndex: pageIndices[0], expectedRevision: row.revision }, false, snapshot, render);
   // Do not present a stale image as the current saved design if an edit raced the render.
   const latest = await projectRow(c, row.id);
   if (latest.thumbnail_deleting) fail(404, 'not_found', 'Project not found.');

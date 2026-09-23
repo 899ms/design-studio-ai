@@ -1,11 +1,24 @@
 import { z } from 'zod';
-import { vectorSchema } from './design-capabilities';
+import { cameraKeySchema, sceneEmitterSchema, sceneObjectSchema, vectorSchema } from './design-capabilities';
+import { emitterPresetNames } from './scene-presets';
+import { responseModeSchema } from './document-change-summary';
+export const clipPresetNames = ['idle', 'wag', 'walk', 'wing-flap', 'roar', 'breath-attack', 'tail-swipe'] as const;
 const id = z.string().min(1).max(120);
 const finite = z.number().finite();
 const quadrupedLandmarksSchema = z.object({ hips: vectorSchema, chest: vectorSchema, head: vectorSchema, frontLeft: vectorSchema, frontRight: vectorSchema, backLeft: vectorSchema, backRight: vectorSchema, tail: vectorSchema });
 const wingLandmarksSchema = z.object({ shoulder: vectorSchema, elbow: vectorSchema, wrist: vectorSchema, fingers: z.array(z.object({ base: vectorSchema, tip: vectorSchema })).min(3).max(5) });
 export const wingedLandmarksSchema = quadrupedLandmarksSchema.extend({ jaw: vectorSchema, jawTip: vectorSchema, wingLeft: wingLandmarksSchema, wingRight: wingLandmarksSchema });
+const materialPatchSchema = sceneObjectSchema.shape.material.unwrap().pick({ color: true, metalness: true, roughness: true, emissive: true, emissiveIntensity: true, transmission: true, thickness: true, ior: true, clearcoat: true, clearcoatRoughness: true, bloom: true, transparent: true, doubleSided: true, wireframe: true });
+/** Partial page-level settings: a key set to null removes that setting. */
+const settingsPatch = z.record(z.string().max(40), z.unknown());
 export const sceneCommandSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('camera'), position: vectorSchema.optional(), target: vectorSchema.optional(), fov: finite.min(10).max(120).optional(), safeFrame: finite.min(0).max(.3).optional() }),
+  z.object({ action: z.literal('camera-key'), time: finite.min(0).max(3600), position: vectorSchema.optional(), target: vectorSchema.optional(), fov: cameraKeySchema.shape.fov, ease: cameraKeySchema.shape.ease, remove: z.boolean().default(false) }),
+  z.object({ action: z.literal('environment'), ambient: finite.min(0).max(10).optional(), light: z.object({ position: vectorSchema.optional(), intensity: finite.min(0).max(20).optional(), color: z.string().max(80).optional() }).optional(), atmosphere: settingsPatch.nullable().optional(), rendering: settingsPatch.nullable().optional() }),
+  z.object({ action: z.literal('emitter'), id, preset: z.enum(emitterPresetNames).optional(), ...sceneEmitterSchema.omit({ id: true }).partial().shape }),
+  z.object({ action: z.literal('remove-emitter'), id }),
+  z.object({ action: z.literal('terrain'), outputId: id, shape: z.enum(['plane', 'mountain']).default('mountain'), size: z.tuple([finite.min(.1).max(10000), finite.min(.1).max(10000)]).default([20, 20]), resolution: z.number().int().min(4).max(128).default(64), height: finite.min(0).max(1000).default(4), seed: z.number().int().min(0).max(2147483647).default(1), octaves: z.number().int().min(1).max(6).default(4), roughness: finite.min(.1).max(.9).default(.5), position: vectorSchema.default([0, 0, 0]), color: z.string().max(80).default('#DDE7F0') }),
+  z.object({ action: z.literal('material'), nodeId: id, opacity: finite.min(0).max(1).optional(), ...materialPatchSchema.shape }),
   z.object({action:z.literal('checkpoint'),nodeId:id,outputId:id}),
   z.object({action:z.literal('restore-mesh'),nodeId:id,sourceId:id}),
   z.object({action:z.literal('insert-loop'),nodeId:id,axis:z.enum(['x','y','z']),offset:finite}),
@@ -32,10 +45,10 @@ export const sceneCommandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('weights'), nodeId: id, mode: z.enum(['normalize', 'smooth', 'mirror']), iterations: z.number().int().min(1).max(10).default(2) }),
   z.object({ action: z.literal('pose'), nodeId: id, bone: id, rotation: vectorSchema }),
   z.object({ action: z.literal('ik'), nodeId: id, endBone: id, target: vectorSchema, chainLength: z.number().int().min(1).max(4).default(2), maxAngle: finite.min(1).max(180).default(120) }),
-  z.object({ action: z.literal('clip'), nodeId: id, preset: z.enum(['idle', 'wag', 'walk', 'wing-flap', 'roar']), start: finite.min(0).max(3500).default(0), duration: finite.min(.2).max(30).default(2), strength: finite.min(0).max(2).default(1), wristLag: finite.min(0).max(.5).default(.15) }),
+  z.object({ action: z.literal('clip'), nodeId: id, preset: z.enum(clipPresetNames), start: finite.min(0).max(3500).default(0), duration: finite.min(.2).max(30).default(2), strength: finite.min(0).max(2).default(1), wristLag: finite.min(0).max(.5).default(.15) }),
   z.object({ action: z.literal('morph'), nodeId: id, name: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(60), vertices: z.array(z.number().int().min(0)).min(1).max(300000), delta: vectorSchema, weight: finite.min(0).max(1).default(0) }),
   z.object({ action: z.literal('uv-pack'), nodeId: id, seams: z.array(z.tuple([z.number().int().min(0), z.number().int().min(0)])).max(20000).default([]) }),
   z.object({ action: z.literal('paint'), nodeId: id, layerId:id.optional(), uv: z.tuple([finite.min(0).max(1), finite.min(0).max(1)]), radius: finite.min(.001).max(1), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
 ]);
 export type SceneCommand = z.infer<typeof sceneCommandSchema>;
-export const sceneRequestSchema = z.object({ pageId: id, command: sceneCommandSchema, expectedRevision: z.number().int().positive(), preview: z.boolean().default(true) });
+export const sceneRequestSchema = z.object({ pageId: id, command: sceneCommandSchema, expectedRevision: z.number().int().positive(), preview: z.boolean().default(true), responseMode: responseModeSchema });

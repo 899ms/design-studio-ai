@@ -3,12 +3,13 @@ import {rigOwner} from '../shared/scene-shared-rig';
 import type {SceneBrushTool} from './scene-advanced-tools';
 import { SceneAuthoringPanel } from './scene-authoring-panel';
 import { mountSceneComposition } from '../shared/scene-composition';
+import { sceneUsesPostProcessing } from '../shared/scene-effects';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import type { DesignDocument, DesignNode, DesignPage, Theme } from '../shared/schema';
-import { animateScene, buildScene, defaultScene, disposeScene, exportScene } from '../shared/scene-runtime';
+import { animateScene, buildScene, cameraTargets, defaultScene, disposeScene, exportScene } from '../shared/scene-runtime';
 import { MeshTools } from './mesh-tools';
 import { download } from './api';
 
@@ -61,7 +62,7 @@ export function SceneView({ page, theme, selected, onSelect, doc, pageIndex = 0,
         const built = await buildScene(handlers.current.renderDocument, pageIndex, handlers.current.time);
         if (disposed) { disposeScene(built.scene); return; }
         scene = built.scene; const { camera, objects, target } = built;
-        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !page.scene?.rendering?.bloom });
+        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !sceneUsesPostProcessing(page) });
         renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; element.appendChild(renderer.domElement);
         orbit = new OrbitControls(camera, renderer.domElement); orbit.target.copy(target); orbit.enableDamping = true; orbit.enabled = !editing || mode === 'object';
         let needsRender = true;
@@ -135,7 +136,7 @@ export function SceneView({ page, theme, selected, onSelect, doc, pageIndex = 0,
         renderer.setAnimationLoop(() => {
           if (!scene || !renderer || !orbit) return;
           const current = handlers.current, timeChanged = renderedTime !== current.time;
-          if (timeChanged && !gizmo?.dragging) { animateScene(scene, current.renderDocument, pageIndex, current.time); renderedTime = current.time; }
+          if (timeChanged && !gizmo?.dragging) { animateScene(scene, current.renderDocument, pageIndex, current.time); renderedTime = current.time; const cameraTarget = cameraTargets.get(camera); if (page.scene?.camera.keys?.length && cameraTarget) orbit.target.fromArray(cameraTarget); }
           scene.updateMatrixWorld(true);
           const selectionChanged = previousSelection !== current.selection;
           if (mesh && selectedPoints && (timeChanged || selectionChanged)) {

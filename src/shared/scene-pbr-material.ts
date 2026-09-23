@@ -8,6 +8,7 @@ export async function applySceneMaterial(material:T.MeshStandardMaterial,node:De
   const config=node.scene?.material;if(!config)return;
   if(config.color!==undefined)material.color.set(resolveColor(config.color,doc.theme));
   for(const key of ['metalness','roughness','wireframe','emissiveIntensity','alphaTest','transparent'] as const)if(config[key]!==undefined)(material as any)[key]=config[key];
+  if(material instanceof T.MeshPhysicalMaterial)for(const key of ['transmission','thickness','ior','clearcoat','clearcoatRoughness'] as const)if(config[key]!==undefined)material[key]=config[key];
   if(config.emissive!==undefined)material.emissive.set(resolveColor(config.emissive,doc.theme));
   if(config.normalScale)material.normalScale.fromArray(config.normalScale);
   if(config.aoIntensity!==undefined)material.aoMapIntensity=config.aoIntensity;

@@ -2,7 +2,8 @@ import {Hono} from 'hono';
 import type {Bindings,Env} from './types';
 import type {JobRow} from './operation-jobs';
 import {operationJobSchema} from '../src/shared/operation-jobs';
-import {saveDocument} from './projects';
+import {applySceneRequest,saveDocument} from './projects';
+import {paintHash} from '../src/shared/paint-png';
 import {renderProjectExport} from './exports';
 import {ApiError} from './security';
 export async function processOperation(env:Bindings,id:string){
@@ -16,10 +17,11 @@ export async function processOperation(env:Bindings,id:string){
   c.set('user',{id:row.user_id,email:'',name:''});c.set('authMethod','token');c.set('tokenKind','api');
   const stored=await env.ASSETS_BUCKET.get(row.input_key);if(!stored)throw new Error('Operation input unavailable');const payload=JSON.parse(new TextDecoder().decode(await stored.arrayBuffer())),request=operationJobSchema.parse(payload.request);
   // Input retrieval may outlive the lease. Renew ownership before any side effects.
-  const renewed=Date.now();const active=await env.DB.prepare('UPDATE operation_jobs SET stage=?,updated_at=?,lease_until=? WHERE id=? AND lease=?').bind(request.kind==='save'?'saving':'rendering',renewed,renewed+16*60000,id,lease).run();
+  const renewed=Date.now();const active=await env.DB.prepare('UPDATE operation_jobs SET stage=?,updated_at=?,lease_until=? WHERE id=? AND lease=?').bind(request.kind==='export'?'rendering':'saving',renewed,renewed+16*60000,id,lease).run();
   if(!active.meta.changes)return new Response(null,{status:204});
   let response:Response,revision:number;
   if(request.kind==='save'){const input=request.input,project=await saveDocument(c,row.project_id,input.document,input.expectedRevision,input.expectedBriefRevision,`job-${row.id}`);revision=project.revision;response=Response.json({project});}
+  else if(request.kind==='scene'){const input={...request.input,preview:false},identity={key:`job-${row.id}`,hash:await paintHash(new TextEncoder().encode(JSON.stringify(input)))},scene=await applySceneRequest(c,row.project_id,input,identity);revision=scene.revision;response=Response.json(scene);}
   else {response=await renderProjectExport(c,row.project_id,request.input,false,payload.snapshot);revision=request.input.expectedRevision;}
   const bytes=await response.arrayBuffer();if(bytes.byteLength>100*1024*1024)throw new Error('Operation result exceeds 100 MB');
   await env.ASSETS_BUCKET.put(resultKey,bytes,{httpMetadata:{contentType:response.headers.get('Content-Type')??'application/octet-stream',contentDisposition:response.headers.get('Content-Disposition')??`attachment; filename="save-${row.operation_id}.json"`}});
