@@ -4,6 +4,7 @@ import { sceneRequestSchema } from '../src/shared/scene-authoring-schema';
 import { paintingCommandSchema } from '../src/shared/painting-command';
 import { documentSaveSchema } from '../src/shared/document-save-contract';
 import { motionInspectionSchema } from '../src/shared/motion-inspection';
+import { documentChanges, projectSummary, responseModeSchema } from '../src/shared/document-change-summary';
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   McpServer,
@@ -108,7 +109,7 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
    const bytes=await response.arrayBuffer();if(bytes.byteLength>20*1024*1024)return {isError:true,...result({error:{message:'Result exceeds 20 MB; download with dsa operations result.'}})};
    return {content:[{type:'resource' as const,resource:{uri:`studio://operations/${projectId}/${operationId}`,mimeType:response.headers.get('Content-Type')!,blob:Buffer.from(bytes).toString('base64')}}]};
   });
-  server.registerTool('start_operation',{description:'Start a durable save or export job. Reuse the same operation ID and payload after an uncertain response.',inputSchema:{projectId:z.string(),request:operationJobSchema}},async ({projectId,request})=>callApi('POST',`/api/projects/${encodeURIComponent(projectId)}/operations`,request));
+  server.registerTool('start_operation',{description:'Start a durable save, scene (apply one author_scene command outside the request timeout) or export job. Reuse the same operation ID and payload after an uncertain response.',inputSchema:{projectId:z.string(),request:operationJobSchema}},async ({projectId,request})=>callApi('POST',`/api/projects/${encodeURIComponent(projectId)}/operations`,request));
   server.registerTool('get_operation',{description:'Read durable operation status and private result URL.',inputSchema:{projectId:z.string(),operationId:z.string()},annotations:{readOnlyHint:true}},async ({projectId,operationId})=>callApi('GET',`/api/projects/${encodeURIComponent(projectId)}/operations/${encodeURIComponent(operationId)}`));
   registerDesignSystemTools(server, callApi);
   registerCommunityTools(server, async (method,path,body)=>app.request(`${origin(c)}${path}`,{
@@ -116,8 +117,8 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
     ...(body===undefined?{}:{body:body instanceof FormData?body:JSON.stringify(body)}),
   },telemetryEnv(c,toolSpan.getStore())));
   registerObservabilityTools(server, callApi);
-  server.registerTool('inspect_scene',{description:'Inspect saved 3D mesh, skeleton and sampled pose.',inputSchema:{projectId:z.string(),pageId:z.string().optional(),time:z.number().min(0).max(3600).optional()},annotations:{readOnlyHint:true}},async ({projectId,pageId,time})=>callApi('GET',`/api/projects/${encodeURIComponent(projectId)}/scene?${new URLSearchParams({...pageId?{pageId}:{},...time!==undefined?{time:String(time)}:{}})}`));
-  server.registerTool('author_scene',{description:'Preview or apply a shared 3D command. Requires current revision; preview defaults to true.',inputSchema:{projectId:z.string(),...sceneRequestSchema.shape}},async ({projectId,...body})=>callApi('POST',`/api/projects/${encodeURIComponent(projectId)}/scene`,body));
+  server.registerTool('inspect_scene',{description:'Inspect saved 3D mesh, skeleton and sampled pose. detail "summary" returns counts, bounds, issues and page camera/emitter/rendering settings without bone positions or topology diagnostics.',inputSchema:{projectId:z.string(),pageId:z.string().optional(),time:z.number().min(0).max(3600).optional(),detail:z.enum(['full','summary']).optional()},annotations:{readOnlyHint:true}},async ({projectId,pageId,time,detail})=>callApi('GET',`/api/projects/${encodeURIComponent(projectId)}/scene?${new URLSearchParams({...pageId?{pageId}:{},...time!==undefined?{time:String(time)}:{},...detail?{detail}:{}})}`));
+  server.registerTool('author_scene',{description:'Preview or apply a shared 3D command: mesh, rig, clip, material, terrain, and page-level camera, camera-key, environment (lights, fog, rendering, sky/panorama, post effects), emitter (presets snowfall, snow-burst, frost-breath, ground-mist) and remove-emitter. Page-level actions merge into the scene instead of replacing it. Requires current revision; preview defaults to true. responseMode "summary" returns changed IDs and compact node summaries.',inputSchema:{projectId:z.string(),...sceneRequestSchema.shape}},async ({projectId,...body})=>callApi('POST',`/api/projects/${encodeURIComponent(projectId)}/scene`,body));
   server.registerTool('inspect_motion',{description:'Read rig IDs, clips, skins, constraints and an optional sampled pose. No provider call.',inputSchema:{projectId:z.string(),...motionInspectionSchema.shape}},async ({projectId,...query})=>callApi('GET',`/api/projects/${encodeURIComponent(projectId)}/motion?${new URLSearchParams(Object.entries(query).filter(([,v])=>v!==undefined).map(([k,v])=>[k,String(v)]))}`));
   server.registerTool(
     'merge_design',
@@ -200,7 +201,7 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
     "update_document",
     {
       description:
-        "Persist a complete v1/v2 document. Preserve boards and paintings. expectedRevision is required. For painting saves, operationId allows retrying the exact payload; a changed payload conflicts.",
+        "Persist a complete v1/v2 document. Preserve boards and paintings. expectedRevision is required. For painting saves, operationId allows retrying the exact payload; a changed payload conflicts. To change a few fields, prefer patch_document or author_scene, which do not resend the document. responseMode 'summary' returns project metadata and changed page/node IDs instead of the document.",
       inputSchema: {
         projectId: z.string(),
         ...documentSaveSchema.shape,
@@ -218,23 +219,24 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
     "patch_document",
     {
       description:
-        "Apply shared document operations atomically. Inspect schema resource for operation contracts. Requires expectedRevision.",
+        "Apply shared document operations atomically without resending the full document. Inspect schema resource for operation contracts. Requires expectedRevision. responseMode 'summary' returns project metadata and changed page/node IDs instead of the document.",
       inputSchema: {
         projectId: z.string(),
         operations: operationsSchema,
         expectedRevision: z.number().int().positive(),
+        responseMode: responseModeSchema,
       },
     },
-    async ({ projectId, operations, expectedRevision }) => {
+    async ({ projectId, operations, expectedRevision, responseMode }) => {
       try {
         const row = await projectRow(c, projectId);
+        const before = documentSchema.parse(JSON.parse(row.document));
         const doc = mutateDocument(
-          documentSchema.parse(JSON.parse(row.document)),
+          before,
           operations as Parameters<typeof mutateDocument>[1],
         );
-        return result({
-          project: await saveDocument(c, projectId, doc, expectedRevision),
-        });
+        const project = await saveDocument(c, projectId, doc, expectedRevision);
+        return result(responseMode === 'summary' ? { project: projectSummary(project), ...documentChanges(before, project.document) } : { project });
       } catch (error) {
         return {
           isError: true,
@@ -457,7 +459,7 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
     return visualInspectionContent(await response.json() as VisualInspectionResult);
   };
   server.registerTool('inspect_project', {
-    description: 'See real saved design pixels: a single page/view/slide or a paginated overview contact sheet. Returns image content plus IDs, revision, time and image bounds. Follow nextOffset to inspect all pages; use mode page with pageId for detail. No publishing or provider call.',
+    description: 'See real saved design pixels: a single page/view/slide or a paginated overview contact sheet. Returns image content plus IDs, revision, time and image bounds. Follow nextOffset to inspect all pages; use mode page with pageId for detail. In page mode, camera {position,target,fov?} renders a 3D page from another viewpoint without saving it. No publishing or provider call.',
     inputSchema: { projectId: z.string(), ...visualInspectionSchema.shape }, annotations: { readOnlyHint: true },
   }, async ({ projectId, ...input }) => inspectApi(`/api/projects/${encodeURIComponent(projectId)}/inspect`, visualInspectionSchema.parse(input)));
   server.registerTool('inspect_workspace', {

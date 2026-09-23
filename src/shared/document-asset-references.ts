@@ -2,6 +2,7 @@ import type { AssetRef, DesignDocument } from './schema';
 
 /** Explicit references only: free-form text and opaque user data must never be rewritten. */
 export function visitDocumentAssetIds(doc: DesignDocument, visit: (id: string) => string): void {
+  for (const page of doc.pages) if (page.scene?.rendering?.environmentAssetId) page.scene.rendering.environmentAssetId = visit(page.scene.rendering.environmentAssetId);
   for (const page of doc.pages) for (const node of page.nodes) {
     for(const key of ['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const)if(node.scene?.material?.[key])node.scene.material[key]=visit(node.scene.material[key]!);
   }

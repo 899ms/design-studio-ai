@@ -11,6 +11,8 @@ import { geometryFor, meshData } from './scene-runtime';
 import { loft, relax, remesh } from './scene-mesh-topology';
 import { applyBoneLimits, bind, limitedRotation, mirrorPose, mirrorWeights, normalizeWeights, quadruped, smoothWeights, solveIK } from './scene-rigging';
 import { packUV } from './scene-uv';
+import { applyPageCommand } from './scene-page-authoring';
+import { terrainMesh } from './scene-terrain';
 export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCommand){
   const command=sceneCommandSchema.parse(input),page=doc.pages.find(p=>p.id===pageId);if(!page)throw new Error('Unknown page');
   const find=(id:string)=>{const n=page.nodes.find(n=>n.id===id);if(!n||n.type!=='model3d')throw new Error('Select an existing 3D object');return n;};
@@ -18,8 +20,11 @@ export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCo
   if(command.action==='remesh'){if(new Set(command.nodeIds).size!==command.nodeIds.length)throw new Error('Choose each remesh source once');const sources=command.nodeIds.map(find);if(sources.some(n=>n.scene?.bones?.length||n.scene?.rigId))throw new Error('Remesh unrigged sources only');const mesh=remesh(sources.map(n=>({...n,scene:{...n.scene,position:n.scene?.position??[(n.x+n.width/2-page.width/2)/240,(page.height/2-n.y-n.height/2)/240,Number(n.data?.z??0)],scale:n.scene?.scale??[n.width/400,n.height/400,Number(n.data?.depth??n.width)/400]}})),command.resolution,command.symmetry,command.blend);add(command.outputId,mesh,sources[0].scene?.material?.color??'#D89B55');sources.forEach(n=>n.visible=false);return;}
   if(command.action==='loft'){add(command.outputId,loft(command.rings,command.segments),command.color);return;}
   if(command.action==='share-rig'){shareRig(doc,pageId,command.nodeId);return;}
+  if(command.action==='camera'||command.action==='camera-key'||command.action==='environment'||command.action==='emitter'||command.action==='remove-emitter'){applyPageCommand(doc,pageId,command);return;}
+  if(command.action==='terrain'){add(command.outputId,terrainMesh(command),command.color);const terrain=page.nodes.at(-1)!;terrain.name='Terrain';terrain.scene!.position=command.position;terrain.scene!.material!.roughness=.9;return;}
   const node=find(command.nodeId);node.scene??={};const scene=node.scene;
   if(command.action==='checkpoint'){if(page.nodes.some(n=>n.id===command.outputId))throw new Error('Checkpoint ID already exists');page.nodes.push({...structuredClone(node),id:command.outputId,name:`Checkpoint: ${node.name}`,visible:false,locked:true,data:{...node.data,checkpointOf:node.id}});return;}
+  if(command.action==='material'){const {action,nodeId,opacity,...patch}=command;scene.material={...scene.material,...Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined))};if(opacity!==undefined)node.opacity=opacity;return;}
   if(command.action==='restore-mesh'){const source=find(command.sourceId);if(source.data?.checkpointOf!==node.id||!source.scene?.mesh)throw new Error('Choose a checkpoint for this mesh');scene.mesh=structuredClone(source.scene.mesh);scene.material=structuredClone(source.scene.material);scene.morphWeights=structuredClone(source.scene.morphWeights);return;}
   if(command.action==='convert'){if(node.src)throw new Error('Imported assets retain their geometry; edit a document mesh');if(!scene.mesh){const g=geometryFor(node);try{scene.mesh=meshData(g);}finally{g.dispose();}}return;}
   if(command.action==='joint'){const source=rigOwner(node,doc),bone=source.scene?.bones?.find(b=>b.name===command.bone);if(!bone)throw new Error('Unknown joint');if(command.mode==='rest')bone.position=command.value;else bone.rotation=limitedRotation(bone,command.value);for(const child of page.nodes.filter(n=>n.data?.rigSourceId===source.id&&!n.scene?.rigId))child.scene!.bones=structuredClone(source.scene!.bones);return;}

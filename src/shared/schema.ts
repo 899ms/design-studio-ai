@@ -69,6 +69,8 @@ export const documentSchema = z.discriminatedUnion('schemaVersion', [legacyDocum
     unique(page.id);
     const nodes = new Map(page.nodes.map(n => [n.id, n]));
     total += page.nodes.length;
+    const panorama = page.scene?.rendering?.environmentAssetId;
+    if (panorama && !doc.assets.some(a => a.id === panorama && /^image\/(png|jpeg|webp)$/.test(a.mimeType))) ctx.addIssue({ code: 'custom', message: 'Scene panorama must reference a PNG, JPEG or WebP project asset' });
     for (const node of page.nodes) {
       unique(node.id); nodeIds.add(node.id);
       if(node.type==='audio'||node.type==='video'){

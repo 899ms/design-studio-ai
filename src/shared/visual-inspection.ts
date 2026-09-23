@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { DesignDocument } from './schema';
+import { vectorSchema } from './design-capabilities';
 
 const pagination = { offset: z.number().int().min(0).max(1000000).default(0), limit: z.number().int().min(1).max(12).default(6) };
 const sampling = { time: z.number().finite().min(0).max(3600).default(0), tileSize: z.number().int().min(160).max(800).default(400) };
@@ -11,9 +12,12 @@ export const visualInspectionSchema = z.object({
   expectedRevision: z.number().int().positive().optional(),
   columns: z.number().int().min(1).max(4).default(3),
   maxDimension: z.number().int().min(256).max(2048).default(1600),
+  /** Render-only camera for one page; the saved document and revision are unchanged. */
+  camera: z.object({ position: vectorSchema, target: vectorSchema, fov: z.number().finite().min(10).max(120).optional() }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.pageId !== undefined && value.pageIndex !== undefined) ctx.addIssue({ code: 'custom', message: 'Choose pageId or pageIndex, not both.' });
   if (value.mode !== 'page' && (value.pageId !== undefined || value.pageIndex !== undefined)) ctx.addIssue({ code: 'custom', message: 'Page selectors require mode page.' });
+  if (value.mode !== 'page' && value.camera) ctx.addIssue({ code: 'custom', message: 'A camera override requires mode page.' });
 });
 export type VisualInspectionInput = z.infer<typeof visualInspectionSchema>;
 export interface InspectionRenderOptions { pageIndices: number[]; time: number; mode: 'page' | 'overview'; tileSize: number; columns: number; maxDimension: number }

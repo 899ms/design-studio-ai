@@ -1,6 +1,6 @@
 import {applySceneMaterial} from './scene-pbr-material';
 import {sharedSkinPlugin} from './scene-export-skins';
-import {addSceneEffects,animateSceneEffects} from './scene-effects';
+import {addSceneEffects,animateSceneEffects,scenePanoramas} from './scene-effects';
 import {registerImportedScene,animateImportedScene,disposeImportedScene,bakeImportedScene,importedSampleValues} from './scene-import';
 import {paintMaterial} from './scene-materials';
 import {scenePose,rigOwner} from './scene-shared-rig';
@@ -37,14 +37,37 @@ export function meshData(geometry: THREE.BufferGeometry): MeshData {
   const uv = geometry.getAttribute('uv'); return { positions, indices, ...(uv ? { uv: Array.from(uv.array) } : {}) };
 }
 export const defaultScene = { camera: { position: [5, 4, 7] as [number, number, number], target: [0, .5, 0] as [number, number, number], fov: 40 }, ambient: 2, light: { position: [3, 6, 4] as [number, number, number], intensity: 4, color: '#ffffff' } };
+type SceneCamera = NonNullable<DesignDocument['pages'][number]['scene']>['camera'];
+const easings = { linear: (t: number) => t, 'ease-in': (t: number) => t * t, 'ease-out': (t: number) => t * (2 - t), 'ease-in-out': (t: number) => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2 };
+/** Camera keys hold their ends; each segment eases with its starting key's curve. Without keys the saved camera is static. */
+export function cameraAt(camera: SceneCamera, time: number) {
+  const keys = [...camera.keys ?? []].sort((a, b) => a.time - b.time), pose = (key: NonNullable<SceneCamera['keys']>[number]) => ({ position: key.position, target: key.target, fov: key.fov ?? camera.fov });
+  if (!keys.length) return { position: camera.position, target: camera.target, fov: camera.fov };
+  if (time <= keys[0].time) return pose(keys[0]);
+  const next = keys.findIndex(key => key.time > time); if (next < 0) return pose(keys.at(-1)!);
+  const from = pose(keys[next - 1]), to = pose(keys[next]), t = easings[keys[next - 1].ease ?? 'ease-in-out']((time - keys[next - 1].time) / (keys[next].time - keys[next - 1].time));
+  const mix = (a: number[], b: number[]) => a.map((v, i) => v + (b[i] - v) * t) as [number, number, number];
+  return { position: mix(from.position, to.position), target: mix(from.target, to.target), fov: from.fov + (to.fov - from.fov) * t };
+}
+function placeCamera(camera: THREE.PerspectiveCamera, pose: ReturnType<typeof cameraAt>) {
+  camera.position.fromArray(pose.position); camera.lookAt(new THREE.Vector3(...pose.target));
+  if (camera.fov !== pose.fov) { camera.fov = pose.fov; camera.updateProjectionMatrix(); }
+  cameraTargets.set(camera, pose.target);
+}
+/** Look-at point of an animated camera, kept outside userData so GLB exports stay unchanged. */
+export const cameraTargets = new WeakMap<THREE.Camera, [number, number, number]>();
+const physicalKeys = ['transmission', 'thickness', 'ior', 'clearcoat', 'clearcoatRoughness'] as const;
 export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
   const page = doc.pages[pageIndex], config = page.scene ?? defaultScene;
   const scene = new THREE.Scene(); scene.background = new THREE.Color(resolveColor(page.background, doc.theme));
-  const camera = new THREE.PerspectiveCamera(config.camera.fov, page.width / page.height, .01, 10000); camera.name = 'StudioCamera'; camera.position.fromArray(config.camera.position); camera.lookAt(new THREE.Vector3(...config.camera.target)); scene.add(camera);
+  const pose = cameraAt(config.camera, time), camera = new THREE.PerspectiveCamera(pose.fov, page.width / page.height, .01, 10000); camera.name = 'StudioCamera'; placeCamera(camera, pose); scene.add(camera);
   scene.add(new THREE.AmbientLight(0xffffff, config.ambient));
   const light = new THREE.DirectionalLight(resolveColor(config.light.color, doc.theme, '#ffffff'), config.light.intensity); light.position.fromArray(config.light.position); light.castShadow = true; scene.add(light);
   addSceneEffects(scene,page);
   animateSceneEffects(scene,time);
+  const panorama = doc.assets.find(a => a.id === page.scene?.rendering?.environmentAssetId);
+  // An unavailable panorama leaves the page without an environment instead of failing the whole scene.
+  if (page.scene?.rendering?.environment === 'panorama' && panorama) { const texture = await new THREE.TextureLoader().loadAsync(panorama.url).catch(() => undefined); if (texture) { texture.mapping = THREE.EquirectangularReflectionMapping; texture.colorSpace = THREE.SRGBColorSpace; scenePanoramas.set(scene, texture); } }
   const objects = new Map<string, THREE.Object3D>();
   let pendingMaterial: THREE.Material | undefined, pendingGeometry: THREE.BufferGeometry | undefined;
   try {
@@ -63,7 +86,8 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
       }
     }
     else {
-      const material = new THREE.MeshStandardMaterial({ vertexColors: !!n.scene?.mesh?.colors, color: resolveColor(materialConfig?.color ?? n.style?.fill ?? n.data?.color ?? '$accent', doc.theme), metalness: materialConfig?.metalness ?? Number(n.data?.metalness ?? .15), roughness: materialConfig?.roughness ?? Number(n.data?.roughness ?? .35), wireframe: materialConfig?.wireframe ?? false, side: materialConfig?.doubleSided ? THREE.DoubleSide : THREE.FrontSide, opacity: n.opacity ?? 1, transparent: materialConfig?.transparent ?? ((n.opacity ?? 1) < 1) });
+      const Material = physicalKeys.some(key => materialConfig?.[key] !== undefined) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+      const material = new Material({ vertexColors: !!n.scene?.mesh?.colors, color: resolveColor(materialConfig?.color ?? n.style?.fill ?? n.data?.color ?? '$accent', doc.theme), metalness: materialConfig?.metalness ?? Number(n.data?.metalness ?? .15), roughness: materialConfig?.roughness ?? Number(n.data?.roughness ?? .35), wireframe: materialConfig?.wireframe ?? false, side: materialConfig?.doubleSided ? THREE.DoubleSide : THREE.FrontSide, opacity: n.opacity ?? 1, transparent: materialConfig?.transparent ?? ((n.opacity ?? 1) < 1) });
       pendingMaterial = material;
       await applySceneMaterial(material,n,doc);
       if(materialConfig)paintMaterial(material,materialConfig,resolveColor(materialConfig.color??'#ffffff',doc.theme));
@@ -76,7 +100,7 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
       } else object = new THREE.Mesh(geometry, material);
     }
     if (object instanceof THREE.Mesh && object.morphTargetDictionary && object.morphTargetInfluences) for (const [name, index] of Object.entries(object.morphTargetDictionary)) object.morphTargetInfluences[index] = n.scene?.morphWeights?.[name] ?? 0;
-    object.name = n.id; object.visible = n.visible !== false;
+    object.name = n.id; object.visible = n.visible !== false; if (materialConfig?.bloom === false) object.traverse(child => { child.userData.bloom = false; });
     object.position.fromArray(n.scene?.position ?? [(n.x + n.width / 2 - page.width / 2) / 240, (page.height / 2 - n.y - n.height / 2) / 240, Number(n.data?.z ?? 0)]);
     const rotation = n.scene?.rotation ?? [Number(n.data?.rotationX ?? 0), Number(n.data?.rotationY ?? 0), n.rotation ?? 0]; object.rotation.set(...rotation.map(v => v * Math.PI / 180) as [number, number, number]);
     object.scale.fromArray(n.scene?.scale ?? [n.width / 400, n.height / 400, Number(n.data?.depth ?? n.width) / 400]);
@@ -84,7 +108,7 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
   }
   for (const n of page.nodes) { const object = objects.get(n.id); if (object) (n.parentId && objects.get(n.parentId) || scene).add(object); }
   for(const node of page.nodes.filter(n=>n.scene?.rigId)){const mesh=objects.get(node.id),source=objects.get(node.scene!.rigId!);if(mesh instanceof THREE.SkinnedMesh&&source instanceof THREE.SkinnedMesh){for(const root of [...mesh.children].filter(c=>c instanceof THREE.Bone))mesh.remove(root);mesh.skeleton.dispose();mesh.bindMode='attached';mesh.bind(source.skeleton,mesh.bindMatrix);}}
-  return { scene, camera, objects, target: new THREE.Vector3(...config.camera.target) };
+  return { scene, camera, objects, target: new THREE.Vector3(...pose.target) };
   } catch (error) {
     disposeScene(scene); pendingGeometry?.dispose();
     if (pendingMaterial) { for (const value of Object.values(pendingMaterial)) if (value instanceof THREE.Texture) value.dispose(); pendingMaterial.dispose(); }
@@ -93,7 +117,8 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
 }
 export function animateScene(scene: THREE.Scene, doc: DesignDocument, pageIndex: number, time: number) {
   animateSceneEffects(scene,time);
-  const page = doc.pages[pageIndex];
+  const page = doc.pages[pageIndex], camera = scene.getObjectByName('StudioCamera');
+  if (page.scene?.camera.keys?.length && camera instanceof THREE.PerspectiveCamera) placeCamera(camera, cameraAt(page.scene.camera, time));
   for (const node of page.nodes) {
     const object = scene.getObjectByName(node.id); if (!object) continue;
     const n = scenePose(node, doc, time);

@@ -103,15 +103,95 @@ export const sceneObjectSchema = z.object({
     wireframe: z.boolean().optional(),
     doubleSided: z.boolean().optional(),
     textureAssetId: z.string().max(120).optional(),
+    // Any physical field switches the node to a physically based material for ice, glass and lacquer.
+    transmission: number.min(0).max(1).optional(),
+    thickness: number.min(0).max(100).optional(),
+    ior: number.min(1).max(2.333).optional(),
+    clearcoat: number.min(0).max(1).optional(),
+    clearcoatRoughness: number.min(0).max(1).optional(),
+    /** false keeps this node out of the bloom glow while it still renders normally. */
+    bloom: z.boolean().optional(),
   }).optional(),
   bones: z.array(z.object({ name: z.string().max(120), parent: z.number().int().min(-1).max(255), position: vectorSchema, rotation: vectorSchema.optional(), bindRotation: vectorSchema.optional(), rotationLimits:z.object({min:vectorSchema,max:vectorSchema}).refine(l=>l.min.every((v,i)=>v<=l.max[i]),'Joint minimum must not exceed maximum').optional(), mirrorBone:z.string().min(1).max(120).optional() })).max(256).optional(),
 });
+export const cameraKeySchema = z.object({
+  time: number.min(0).max(3600),
+  position: vectorSchema,
+  target: vectorSchema,
+  fov: number.min(10).max(120).optional(),
+  ease: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']).optional(),
+});
+export const sceneEmitterSchema = z.object({
+  id: z.string().min(1).max(120),
+  position: vectorSchema,
+  spread: vectorSchema,
+  velocity: vectorSchema,
+  count: z.number().int().min(1).max(3000),
+  size: number.min(.001).max(10),
+  color: z.string().max(80),
+  lifetime: number.min(.1).max(60),
+  seed: z.number().int().min(0).max(2147483647),
+  start: number.min(0).max(3600).optional(),
+  end: number.min(0).max(3600).optional(),
+  // Absent fields keep the original square, additive, linear particles.
+  sprite: z.enum(['square', 'soft', 'flake', 'mist']).optional(),
+  blending: z.enum(['additive', 'normal']).optional(),
+  opacity: number.min(0).max(1).optional(),
+  /** Fractions of each particle's lifetime spent fading in and out. */
+  fadeIn: number.min(0).max(1).optional(),
+  fadeOut: number.min(0).max(1).optional(),
+  sizeVariance: number.min(0).max(1).optional(),
+  /** Constant acceleration in scene units per second squared. */
+  gravity: vectorSchema.optional(),
+  /** Peak deterministic wander, in scene units. */
+  turbulence: number.min(0).max(100).optional(),
+  /** Radians per second around the emitter's vertical axis. */
+  swirl: number.min(-20).max(20).optional(),
+});
+export const sceneRenderingSchema = z.object({
+  exposure: number.min(.1).max(5).optional(),
+  bloom: number.min(0).max(3).optional(),
+  bloomThreshold: number.min(0).max(10).optional(),
+  shadows: z.boolean().optional(),
+  environmentIntensity: number.min(0).max(5).optional(),
+  /** room is the neutral studio probe; sky is procedural; panorama lights the scene from an equirectangular image asset. */
+  environment: z.enum(['room', 'sky', 'panorama']).optional(),
+  environmentAssetId: z.string().max(120).optional(),
+  environmentBackground: z.boolean().optional(),
+  sky: z.object({
+    elevation: number.min(-10).max(90),
+    azimuth: number.min(-180).max(180),
+    turbidity: number.min(0).max(20).optional(),
+    rayleigh: number.min(0).max(4).optional(),
+  }).optional(),
+  vignette: number.min(0).max(1).optional(),
+  grain: number.min(0).max(1).optional(),
+  grading: z.object({
+    contrast: number.min(0).max(2).optional(),
+    saturation: number.min(0).max(2).optional(),
+    tint: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    tintStrength: number.min(0).max(1).optional(),
+  }).optional(),
+  depthOfField: z.object({
+    /** World distance from the camera that stays sharp. */
+    focus: number.min(.01).max(10000),
+    aperture: number.min(0).max(1),
+    maxBlur: number.min(0).max(.05),
+  }).optional(),
+  lightShafts: z.object({
+    position: vectorSchema,
+    intensity: number.min(0).max(5),
+    decay: number.min(.8).max(1).optional(),
+    threshold: number.min(0).max(10).optional(),
+  }).optional(),
+}).refine(r => r.environment !== 'panorama' || !!r.environmentAssetId, 'A panorama environment needs environmentAssetId');
 export const sceneSchema = z.object({
   camera: z.object({
     position: vectorSchema,
     target: vectorSchema,
     fov: number.min(10).max(120),
     safeFrame: number.min(0).max(.3).optional(),
+    keys: z.array(cameraKeySchema).max(64).optional(),
   }),
   ambient: number.min(0).max(10),
   light: z.object({ position: vectorSchema, intensity: number.min(0).max(20), color: z.string().max(80) }),
@@ -127,26 +207,8 @@ export const sceneSchema = z.object({
     shadow: z.boolean().optional(),
   })).max(8).optional(),
   atmosphere: z.object({ fogColor: z.string().max(80), fogDensity: number.min(0).max(1) }).optional(),
-  rendering: z.object({
-    exposure: number.min(.1).max(5).optional(),
-    bloom: number.min(0).max(3).optional(),
-    bloomThreshold: number.min(0).max(10).optional(),
-    shadows: z.boolean().optional(),
-    environmentIntensity: number.min(0).max(5).optional(),
-  }).optional(),
-  emitters: z.array(z.object({
-    id: z.string().min(1).max(120),
-    position: vectorSchema,
-    spread: vectorSchema,
-    velocity: vectorSchema,
-    count: z.number().int().min(1).max(3000),
-    size: number.min(.001).max(10),
-    color: z.string().max(80),
-    lifetime: number.min(.1).max(60),
-    seed: z.number().int().min(0).max(2147483647),
-    start: number.min(0).max(3600).optional(),
-    end: number.min(0).max(3600).optional(),
-  })).max(8).optional(),
+  rendering: sceneRenderingSchema.optional(),
+  emitters: z.array(sceneEmitterSchema).max(8).optional(),
 });
 export type Layout = z.infer<typeof layoutSchema>;
 export type MeshData = z.infer<typeof meshSchema>;

@@ -1,5 +1,6 @@
 import { sampleCreativeGifs } from './creative-elements-export';
 import { mountSceneComposition } from '../shared/scene-composition';
+import { sceneUsesPostProcessing } from '../shared/scene-effects';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
@@ -33,7 +34,7 @@ export async function mountExportPage(doc: DesignDocument, index = 0, time: numb
     await loadDocumentFonts(doc);
     if (doc.kind==='3d'||page.scene || page.nodes.some(n=>n.scene)) {
       const built = await buildScene(doc, index, time); scene = built.scene; camera = built.camera;
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !page.scene?.rendering?.bloom });
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !sceneUsesPostProcessing(page) });
       renderer.setPixelRatio(1); renderer.setSize(page.width, page.height);
       host.append(renderer.domElement); composition = mountSceneComposition(host, doc, index, renderer, scene, built.camera); composition.draw(time);
     } else if (usesDom(page)) {

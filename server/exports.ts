@@ -137,7 +137,8 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
     if (renderNodes.some(node => node.width * node.height > 16777216) || totalPixels > 67108864) fail(413, 'render_budget_exceeded', 'Reduce page or object dimensions; a render may contain at most 64 megapixels in total and 16 megapixels per object.');
     const characterMedia=doc.characters?.flatMap(c=>c.attachments.flatMap(a=>[a.assetId,...(a.frames??[])])).filter(Boolean)??[];
     const characterUrls=doc.assets.filter(a=>characterMedia.includes(a.id)).map(a=>a.url);
-    const media = renderNodes.flatMap(node => [node.src, ...(['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const).map(key=>doc.assets.find(asset=>asset.id===node.scene?.material?.[key])?.url)]);
+    const panoramas = selectedPages.map(page => doc.assets.find(asset => asset.id === page.scene?.rendering?.environmentAssetId)?.url);
+    const media = [...panoramas, ...renderNodes.flatMap(node => [node.src, ...(['textureAssetId','normalTextureAssetId','roughnessTextureAssetId','metalnessTextureAssetId','emissiveTextureAssetId','aoTextureAssetId'] as const).map(key=>doc.assets.find(asset=>asset.id===node.scene?.material?.[key])?.url)])];
     if ([...media,...characterUrls].some(url => url && !url.startsWith('/api/assets/') && !url.startsWith('/api/community/') && !url.startsWith('data:'))) fail(400, 'import_asset_required', 'Import external media into the project before cloud rendering. Cloud renderers have no external network access.');
   }
   for (const page of doc.pages) for (const node of page.nodes) if (node.src) node.src = await embed(node.src, renderBudget);

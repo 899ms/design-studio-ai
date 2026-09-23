@@ -37,6 +37,28 @@ The Material inspector exposes emissive color/intensity and owned-image selector
 
 The page's `scene` owns camera, ambient and the original directional light, plus up to eight additional `lights` (point, spot or directional), `atmosphere` fog, and `rendering` exposure, environment intensity, shadows and bloom. Up to eight seeded `emitters` provide bounded particles with position, spread, velocity, lifetime and active interval. These effects use the [shared scene renderer](../src/shared/scene-effects.ts) in the editor, viewer and raster/video capture. GLB/glTF carries supported punctual lights and material data; fog, bloom, exposure, generated environment lighting, cast-shadow settings and timed particle behavior are Studio rendering settings, not a portable glTF effect stack. Review exported GLB under the destination viewer's lighting.
 
+## Cinematic scenes
+
+The [shared schema](../src/shared/design-capabilities.ts) adds these fields:
+
+- `scene.camera.keys`: timed camera moves with position, target, field of view and easing. They are sampled by [`cameraAt`](../src/shared/scene-runtime.ts).
+- `rendering.environment`: `room`, a procedural `sky` or a `panorama`. A panorama is an owned PNG/JPEG/WebP equirectangular asset, not an HDR file, set with `environmentAssetId`. `environmentBackground` shows the environment as the background.
+- `rendering` post effects: vignette, seeded grain, grading, depth of field and light shafts.
+- Emitter styling: sprite, blending, opacity, fades, size variance, gravity, turbulence and swirl.
+- Physical materials: transmission, thickness, IOR, clearcoat and a per-node `bloom:false`.
+
+Emitters without the new styling fields keep their original spawn positions and material.
+
+Sky and panorama backgrounds are excluded from bloom so an HDR sky cannot wash out the frame. Bright sun reflections still glow; raise `bloomThreshold` or set `material.bloom:false` on a node to remove its halo.
+
+Scene commands include:
+
+- `camera`, `camera-key`, `environment`, `emitter` and `remove-emitter`. These merge into the page scene; a `null` rendering or atmosphere field deletes it. They are rejected on a 2D page of a non-3D project that has no scene or 3D objects.
+- `emitter` presets from [scene presets](../src/shared/scene-presets.ts): `snowfall`, `snow-burst`, `frost-breath` and `ground-mist`. Explicit fields override the preset.
+- `terrain`: a deterministic plane or mountain mesh. See [scene terrain](../src/shared/scene-terrain.ts).
+- `material`: patches one node's PBR fields.
+- Clip presets `breath-attack` and `tail-swipe`. The first needs head, neck and jaw bones; the second needs `tail1…` bones.
+
 ## Framing and sound
 
 Set `page.scene.camera.safeFrame` to a margin from 0 to 0.3 (default framing margin 0.08). **Fit animated subject** samples selected subjects' posed bounds across the timeline while preserving camera direction. Portrait/square shot duplication creates another page sharing asset files, with its own camera and dimensions. Sampled bounds are not proof against clipping between samples; check wing and tail extremes and any 2D overlay separately.
@@ -50,7 +72,10 @@ Audio and video nodes store cues in `data`: `audioStart`, `audioEnd`, `audioOffs
 - WebMCP `studio_imported_model({pageId,nodeId})` inventories the open GLB. Add `convert:true` to preview editable conversion and `preview:false` to apply. `studio_frame_scene_shot({pageId,nodeIds,samples,aspect?,preview})` previews fitting (2–61 samples, default 17); optional `aspect` is `portrait` or `square`, and `preview:false` applies locally. Both reject stale results if the document changes while working. Network clients use the shared document/operations and editable-scene export rather than guessing equivalent tool names.
 - `GET /api/projects/:id/scene?pageId=...&time=...` inspects saved geometry and sampled deformation. `POST` to the same path accepts `{pageId,command,expectedRevision,preview}`; preview defaults true. Application uses the existing owner and atomic revision checks.
 - Network MCP exposes `inspect_scene` and `author_scene`. Shared `scene-command` operations also work through `patch_design`.
-- CLI: `dsa scene inspect PROJECT --page PAGE --time 0.5`; `dsa scene command PROJECT --page PAGE --revision N --file command.json` previews, `--apply` saves.
+- `responseMode:"summary"` on scene POST, `author_scene`, `patch_document` and document PUT returns changed page/node IDs and a compact scene summary instead of the whole document. The inspect equivalent is `detail=summary`.
+- A long scene command can run as a durable operation: `{"kind":"scene","operationId":"...","input":{pageId,command,expectedRevision}}`. See [operation jobs](operation-jobs.md).
+- MCP `inspect_project` in page mode accepts a temporary `camera` `{position,target,fov?}`. It renders that angle without saving, and camera keys are ignored for that render.
+- CLI: `dsa scene inspect PROJECT --page PAGE --time 0.5`; `dsa scene command PROJECT --page PAGE --revision N --file command.json` previews, `--apply` saves. Add `--summary` to either for compact output.
 
 For example, a command file may contain `{"action":"bind","nodeId":"body","smooth":2}`. Use IDs read from the project. Do not retry a conflict by incrementing its revision; inspect and reconcile first. Native geometry commands need no provider credentials. Private editing and exporting do not publish the project.
 

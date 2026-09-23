@@ -4,7 +4,7 @@ import {operationJobSchema,type OperationJob} from '../src/shared/operation-jobs
 import {projectRow} from './projects';
 import {paintHash} from '../src/shared/paint-png';
 import {fail,owner,rateLimit} from './security';
-export type JobRow={id:string;project_id:string;user_id:string;operation_id:string;payload_hash:string;kind:'save'|'export';status:OperationJob['status'];stage:string;input_key:string;result_key:string|null;result_type:string|null;revision:number|null;error:string|null;lease:string|null;lease_until:number;created_at:number;updated_at:number};
+export type JobRow={id:string;project_id:string;user_id:string;operation_id:string;payload_hash:string;kind:OperationJob['kind'];status:OperationJob['status'];stage:string;input_key:string;result_key:string|null;result_type:string|null;revision:number|null;error:string|null;lease:string|null;lease_until:number;created_at:number;updated_at:number};
 export const operationRoutes=new Hono<Env>();
 export function jobView(row:JobRow):OperationJob{return {id:row.operation_id,kind:row.kind,status:row.status,stage:row.stage,revision:row.revision,error:row.error?JSON.parse(row.error):null,resultUrl:row.status==='succeeded'?`/api/projects/${row.project_id}/operations/${row.operation_id}/result`:null,createdAt:row.created_at,updatedAt:row.updated_at};}
 async function ownedJob(c:Context<Env>){await projectRow(c,c.req.param('id')!);const row=await c.env.DB.prepare('SELECT * FROM operation_jobs WHERE project_id=? AND user_id=? AND operation_id=?').bind(c.req.param('id'),owner(c),c.req.param('operationId')).first<JobRow>();if(!row)fail(404,'not_found','Unknown operation');return row!;}
