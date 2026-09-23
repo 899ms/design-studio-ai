@@ -30,7 +30,7 @@ export function SceneShotControls({ doc, page, pageUpdate, onDocument }: Props) 
       const target = next.pages.find(page => page.id === targetId)!;
       const scene = { ...target.scene ?? defaultScene, camera: fitted.camera };
       if (duplicate) { target.scene = scene; onDocument(documentSchema.parse(next)); setNotice(`Created ${target.name}. Select its page to preview the shot. Assets remain shared.`); }
-      else { pageUpdate({ scene }); setNotice(`Camera fitted to ${ids.length} subject${ids.length === 1 ? '' : 's'} using ${samples} timeline samples.`); }
+      else { pageUpdate({ scene }); setNotice(`Camera fitted to ${ids.length} subject${ids.length === 1 ? '' : 's'} using ${samples} timeline samples${scene.camera.keys?.length ? `; ${scene.camera.keys.length} camera key distances adjusted` : ''}.`); }
     } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : 'Camera framing failed.'); }
     finally { if (mounted.current) setBusy(false); }
   };

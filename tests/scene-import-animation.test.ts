@@ -13,7 +13,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {buildScene, animateScene, disposeScene, exportScene} from './src/shared/scene-runtime';
 import {inspectImportedScene, importedSampleValues} from './src/shared/scene-import';
 
-async function fixture(extraObjects = 0) {
+async function fixture(extraObjects = 0, textured = false) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,1,0, -1,1,0],3));
   geometry.setIndex([0,1,2]);
@@ -26,6 +26,7 @@ async function fixture(extraObjects = 0) {
   geometry.computeVertexNormals();
   const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({color:'#a45a25',roughness:.65,metalness:.2}));
   mesh.name = 'WingMesh';
+  if(textured) {const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4; canvas.getContext('2d').fillRect(0,0,4,4); mesh.material.map = new THREE.CanvasTexture(canvas);}
   const root = new THREE.Bone(), tip = new THREE.Bone();
   root.name = 'RootJoint'; tip.name = 'WingJoint'; tip.position.y = 1;
   root.add(tip); mesh.add(root); mesh.bind(new THREE.Skeleton([root,tip]));
@@ -70,6 +71,14 @@ globalThis.importHarness = {
       const initial = snapshot(object), inventory = inspectImportedScene(object);
       const samples = times.map(time => {animateScene(built.scene,doc,0,time);return snapshot(object);});
       return {initial,inventory,samples};
+    } finally {disposeScene(built.scene);}
+  },
+  async physical(doc) {
+    const built = await buildScene(doc);
+    try {
+      const materials = [];
+      built.objects.get(doc.pages[0].nodes[0].id).traverse(child => {if(child.isMesh) materials.push(child.material);});
+      return materials.map(material => ({physical:!!material.isMeshPhysicalMaterial,transmission:material.transmission,ior:material.ior,color:material.color.getHexString(),roughness:material.roughness,map:!!material.map}));
     } finally {disposeScene(built.scene);}
   },
   async missing(doc) {
@@ -175,6 +184,15 @@ test('imported GLB clips preserve authored deformation during seek and export', 
       assert.equal(typeof message, 'string');
       assert.match(message, /lost-flight/);
       assert.match(message, /clip/i);
+    });
+
+    await t.test('physical overrides upgrade imported materials and keep their authored values', async () => {
+      const glass = structuredClone(doc);
+      glass.pages[0].nodes[0].src = (await page.evaluate(() => (globalThis as any).importHarness.fixture(0, true))).url;
+      glass.pages[0].nodes[0].scene!.material = { transmission: .6, ior: 1.31 };
+      assert.deepEqual(await page.evaluate(doc => (globalThis as any).importHarness.physical(doc), glass), [{ physical: true, transmission: .6, ior: 1.31, color: 'a45a25', roughness: .65, map: true }]);
+      const standard = await page.evaluate(doc => (globalThis as any).importHarness.physical(doc), doc);
+      assert.equal(standard[0].physical, false);
     });
 
     await t.test('the export sample budget includes the sum of all imported models', async () => {

@@ -117,6 +117,10 @@ test('material edits merge physical and bloom fields without touching geometry',
   assert.equal(node.opacity, .9);
   assert.equal(JSON.stringify(node.scene!.mesh), mesh);
   assert.throws(() => command(doc, { action: 'material', nodeId: 'body', ior: 5 }));
+  doc = command(doc, { action: 'material', nodeId: 'body', transmission: null, ior: null });
+  assert.deepEqual(doc.pages[0].nodes[0].scene!.material, { color: '#aee4ff', roughness: .3, bloom: false }, 'null removes a field so the renderer default applies');
+  doc = command(doc, { action: 'material', nodeId: 'body', color: null, roughness: null, bloom: null });
+  assert.equal(doc.pages[0].nodes[0].scene!.material, undefined);
 });
 
 test('terrain is deterministic, faces upward and sits at its requested position', () => {

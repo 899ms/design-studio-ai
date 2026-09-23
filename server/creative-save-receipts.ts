@@ -14,5 +14,6 @@ export async function readCreativeReceipt(c: Context<Env>, projectId: string, id
     .bind(projectId, owner(c), identity.key).first<{ payload_hash: string; response: string }>();
   if (!receipt) return undefined;
   if (receipt.payload_hash !== identity.hash) fail(409, 'operation_id_conflict', 'This operation ID already committed a different payload. Read its result before starting a new operation.');
-  return JSON.parse(receipt.response) as Project;
+  // receiptDetails holds caller data recorded at commit, such as a scene job's change summary.
+  return JSON.parse(receipt.response) as Project & { receiptDetails?: Record<string, unknown> };
 }

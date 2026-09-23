@@ -45,7 +45,7 @@ The [shared schema](../src/shared/design-capabilities.ts) adds these fields:
 - `rendering.environment`: `room`, a procedural `sky` or a `panorama`. A panorama is an owned PNG/JPEG/WebP equirectangular asset, not an HDR file, set with `environmentAssetId`. `environmentBackground` shows the environment as the background.
 - `rendering` post effects: vignette, seeded grain, grading, depth of field and light shafts.
 - Emitter styling: sprite, blending, opacity, fades, size variance, gravity, turbulence and swirl.
-- Physical materials: transmission, thickness, IOR, clearcoat and a per-node `bloom:false`.
+- Physical materials: transmission, thickness, IOR, clearcoat and a per-node `bloom:false`. On an imported GLB node, a physical field upgrades its standard materials in place and keeps their maps.
 
 Emitters without the new styling fields keep their original spawn positions and material.
 
@@ -56,12 +56,12 @@ Scene commands include:
 - `camera`, `camera-key`, `environment`, `emitter` and `remove-emitter`. These merge into the page scene; a `null` rendering or atmosphere field deletes it. They are rejected on a 2D page of a non-3D project that has no scene or 3D objects.
 - `emitter` presets from [scene presets](../src/shared/scene-presets.ts): `snowfall`, `snow-burst`, `frost-breath` and `ground-mist`. Explicit fields override the preset.
 - `terrain`: a deterministic plane or mountain mesh. See [scene terrain](../src/shared/scene-terrain.ts).
-- `material`: patches one node's PBR fields.
+- `material`: patches one node's PBR fields. A `null` field is removed so the renderer default applies again; removing every physical field returns the node to a standard material. The inspector's **Use standard material** does the same.
 - Clip presets `breath-attack` and `tail-swipe`. The first needs head, neck and jaw bones; the second needs `tail1…` bones.
 
 ## Framing and sound
 
-Set `page.scene.camera.safeFrame` to a margin from 0 to 0.3 (default framing margin 0.08). **Fit animated subject** samples selected subjects' posed bounds across the timeline while preserving camera direction. Portrait/square shot duplication creates another page sharing asset files, with its own camera and dimensions. Sampled bounds are not proof against clipping between samples; check wing and tail extremes and any 2D overlay separately.
+Set `page.scene.camera.safeFrame` to a margin from 0 to 0.3 (default framing margin 0.08). **Fit animated subject** samples selected subjects' posed bounds across the timeline while preserving camera direction. When the page has camera keys, each key keeps its look-at point, direction, time and easing, and only its distance changes, so the motion sampled between its neighbouring keys fits that key's frame. A fit that would place the camera beyond the render distance is refused. Portrait/square shot duplication creates another page sharing asset files, with its own camera and dimensions. Sampled bounds are not proof against clipping between samples; check wing and tail extremes and any 2D overlay separately.
 
 Audio and video nodes store cues in `data`: `audioStart`, `audioEnd`, `audioOffset` (seconds), `audioGain` (0–4), `audioMuted`, `audioLoop` and optional `audioEvent` label. The timeline shows waveform, trim, gain, loop and event controls. The event label marks a cue; it does not synthesize a sound. The editor/viewer and browser/cloud motion exports use the [same cue timing and mixing engine](../src/shared/timeline-audio.ts). Enable audio when browser playback is blocked, import media into the project before cloud export, and listen to the actual WebM/MP4. Encoder and audio-source failures remain explicit; still-image and GLB exports do not include a soundtrack.
 
@@ -73,7 +73,7 @@ Audio and video nodes store cues in `data`: `audioStart`, `audioEnd`, `audioOffs
 - `GET /api/projects/:id/scene?pageId=...&time=...` inspects saved geometry and sampled deformation. `POST` to the same path accepts `{pageId,command,expectedRevision,preview}`; preview defaults true. Application uses the existing owner and atomic revision checks.
 - Network MCP exposes `inspect_scene` and `author_scene`. Shared `scene-command` operations also work through `patch_design`.
 - `responseMode:"summary"` on scene POST, `author_scene`, `patch_document` and document PUT returns changed page/node IDs and a compact scene summary instead of the whole document. The inspect equivalent is `detail=summary`.
-- A long scene command can run as a durable operation: `{"kind":"scene","operationId":"...","input":{pageId,command,expectedRevision}}`. See [operation jobs](operation-jobs.md).
+- A long scene command can run as a durable operation: `{"kind":"scene","operationId":"...","input":{pageId,command,expectedRevision,responseMode?}}`. A replayed summary-mode job returns the changed IDs recorded at commit. See [operation jobs](operation-jobs.md).
 - MCP `inspect_project` in page mode accepts a temporary `camera` `{position,target,fov?}`. It renders that angle without saving, and camera keys are ignored for that render.
 - CLI: `dsa scene inspect PROJECT --page PAGE --time 0.5`; `dsa scene command PROJECT --page PAGE --revision N --file command.json` previews, `--apply` saves. Add `--summary` to either for compact output.
 
