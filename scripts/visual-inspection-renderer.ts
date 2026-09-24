@@ -9,9 +9,9 @@ export async function inspectVisual(doc: DesignDocument, options: InspectionRend
   if (options.mode === 'overview') { context.fillStyle = '#eef0f4'; context.fillRect(0, 0, canvas.width, canvas.height); }
   document.body.style.cssText = 'margin:0;background:transparent';
   for (const [position, index] of options.pageIndices.entries()) {
-    const mounted = await mountExportPage(doc, index, options.time);
+    const bounds = layout.tiles[position], page = doc.pages[index];
+    const mounted = await mountExportPage(doc, index, options.time, false, Math.max(bounds.width / page.width, bounds.height / page.height));
     try {
-      const bounds = layout.tiles[position];
       const image = await rasterizeExportPage(mounted.host, bounds.width, bounds.height);
       context.drawImage(image, bounds.x, bounds.y, bounds.width, bounds.height);
       if (options.mode === 'overview') {

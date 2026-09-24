@@ -12,8 +12,11 @@ import { buildScene, disposeScene, animateScene } from '../shared/scene-runtime'
 import { DocumentView, usesDom } from './document-view';
 import { loadDocumentFonts } from '../shared/font-loading';
 
-/** Render trusted components with browser layout before capture. Call dispose after capture. */
-export async function mountExportPage(doc: DesignDocument, index = 0, time: number | undefined = undefined, offscreen = false) {
+/**
+ * Render trusted components with browser layout before capture. Call dispose after capture.
+ * renderScale sizes the 3D drawing buffer for a downscaled capture, so previews skip pixels they would discard.
+ */
+export async function mountExportPage(doc: DesignDocument, index = 0, time: number | undefined = undefined, offscreen = false, renderScale = 1) {
   doc = await sampleCreativeGifs(doc, time); time ??= 0;
   const page = doc.pages[index], host = document.createElement('section');
   host.style.cssText = `position:relative;width:${page.width}px;height:${page.height}px;overflow:hidden;flex:none;break-after:page`;
@@ -35,7 +38,7 @@ export async function mountExportPage(doc: DesignDocument, index = 0, time: numb
     if (doc.kind==='3d'||page.scene || page.nodes.some(n=>n.scene)) {
       const built = await buildScene(doc, index, time); scene = built.scene; camera = built.camera;
       renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true, premultipliedAlpha: !sceneUsesPostProcessing(page) });
-      renderer.setPixelRatio(1); renderer.setSize(page.width, page.height);
+      renderer.setPixelRatio(Math.min(1, Math.max(.05, renderScale))); renderer.setSize(page.width, page.height);
       host.append(renderer.domElement); composition = mountSceneComposition(host, doc, index, renderer, scene, built.camera); composition.draw(time);
     } else if (usesDom(page)) {
       root = createRoot(host); flushSync(() => root!.render(createElement(DocumentView, { doc, pageIndex: index, time })));

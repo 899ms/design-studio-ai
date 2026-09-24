@@ -62,6 +62,8 @@ The [shared inspection contract](../src/shared/visual-inspection.ts) owns reques
 
 REST returns `scope`, `source: saved`, `total`, `offset`, `nextOffset`, `items`, and PNG `images`. Each item identifies the project, kind, saved revision, page ID/index/name, original dimensions, sampled time, image index and pixel bounds within that image. MCP/WebMCP return this metadata as text alongside actual image content blocks. Browser inputs use `parameters: {id}` and a `body` matching REST. CLI writes PNGs and replaces base64 with `images[].path` and `bytes` in stdout JSON; a failed API request creates no image files. Workspace filenames use `workspace-OFFSET-IMAGE_INDEX.png` and repeat requests replace those files.
 
+Inspection renders 3D scenes at the tile size, not the page size. Bloom and grain keep their full-size look. Each request has a 45-second deadline covering every page it renders. A missed deadline returns `504 render_timeout` and no image. To fix it, request fewer or smaller pages: `limit` or `tileSize` in overview mode, `maxDimension` in page mode. You can also remove transmission from most materials and reduce depth of field, light shafts and emitter density. Retrying the same request will not help.
+
 Browser inspection tools are available in the signed-in workspace and editor when WebMCP is supported. Open-document editing tools still require the editor; visual inspection always uses saved server state.
 
 ```sh
