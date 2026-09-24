@@ -7,6 +7,9 @@ test('3D authoring persists a rig, rejects stale writes, previews without writes
   try{
     const invalid=await page.request.post(path+'/scene',{headers,data:{expectedRevision:project.revision,pageId,command:{action:'convert',nodeId:'missing'}}});expect(invalid.status()).toBe(400);
     const preview=await page.request.post(path+'/scene',{headers,data:{expectedRevision:project.revision,pageId,command:{action:'convert',nodeId:'body'}}});expect(preview.status()).toBe(200);expect((await preview.json()).preview).toBe(true);expect((await (await page.request.get(path)).json()).project.revision).toBe(project.revision);
+    // A batch applies in order and rejects as a whole, naming the failing command.
+    const failedBatch=await page.request.post(path+'/scene',{headers,data:{expectedRevision:project.revision,pageId,preview:false,command:[{action:'convert',nodeId:'body'},{action:'convert',nodeId:'missing'}]}});expect(failedBatch.status()).toBe(400);expect(JSON.stringify(await failedBatch.json())).toContain('Command 2');expect((await (await page.request.get(path)).json()).project.revision).toBe(project.revision);
+    const batch=await page.request.post(path+'/scene',{headers,data:{expectedRevision:project.revision,pageId,responseMode:'summary',command:[{action:'convert',nodeId:'body'},{action:'subdivide',nodeId:'body'}]}});expect(batch.status()).toBe(200);expect((await batch.json()).preview).toBe(true);
     await page.goto(`/?project=${project.id}`);if(await page.locator('.mobile-editor-nav').isVisible())await page.locator('.mobile-editor-nav').getByRole('button',{name:'Canvas',exact:true}).click();await page.getByRole('checkbox',{name:'Live',exact:true}).uncheck();
     await page.getByRole('button',{name:'Character authoring',exact:true}).click();await expect(page.getByRole('region',{name:'3D character authoring'})).toBeVisible();
     // Selection is deterministic through the layer tree at both viewport sizes.

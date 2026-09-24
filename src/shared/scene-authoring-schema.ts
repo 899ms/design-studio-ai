@@ -57,4 +57,5 @@ export const sceneCommandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('paint'), nodeId: id, layerId:id.optional(), uv: z.tuple([finite.min(0).max(1), finite.min(0).max(1)]), radius: finite.min(.001).max(1), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
 ]);
 export type SceneCommand = z.infer<typeof sceneCommandSchema>;
-export const sceneRequestSchema = z.object({ pageId: id, command: sceneCommandSchema, expectedRevision: z.number().int().positive(), preview: z.boolean().default(true), responseMode: responseModeSchema });
+/** One command, or up to 64 applied in order and saved as a single revision. */
+export const sceneRequestSchema = z.object({ pageId: id, command: z.union([sceneCommandSchema, z.array(sceneCommandSchema).min(1).max(64)]), expectedRevision: z.number().int().positive(), preview: z.boolean().default(true), responseMode: responseModeSchema });

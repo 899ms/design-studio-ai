@@ -53,6 +53,8 @@ Sky and panorama backgrounds are excluded from bloom so an HDR sky cannot wash o
 
 Visual inspection and thumbnails render the scene at their output size rather than the page size ([`mountExportPage`](../src/app/export-page.ts) `renderScale`). Bloom and grain keep their full-resolution size, so the preview looks like the export. The previews still run on a software GPU, with a 45-second deadline for each request. When a scene exceeds it, the API returns `504 render_timeout` ([`withPreviewRenderTimeout`](../server/exports.ts)) instead of `render_failed`. Transmission is the largest single cost because it renders the scene again. Depth of field, light shafts, many lights and dense emitters also add time. Full-size exports keep scale 1.
 
+A scene request's `command` can be one command or an array of up to 64. An array applies in order and saves one revision, and if any command fails, nothing is saved.
+
 Scene commands include:
 
 - `camera`, `camera-key`, `environment`, `emitter` and `remove-emitter`. These merge into the page scene; a `null` rendering or atmosphere field deletes it. They are rejected on a 2D page of a non-3D project that has no scene or 3D objects.
