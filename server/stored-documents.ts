@@ -55,7 +55,6 @@ export async function discardDocument(env: Storage, value: string | undefined) {
  * does not reference it; if the row cannot be read the object is kept. Returns whether the write provably committed.
  */
 export async function discardUnlessReferenced(env: Storage & Pick<Bindings, 'DB'>, projectId: string, value: string) {
-  if (!storedDocumentKey(value)) return false;
   try {
     const row = await env.DB.prepare('SELECT document FROM projects WHERE id=?').bind(projectId).first<{ document: string }>();
     if (row?.document === value) return true;

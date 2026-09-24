@@ -25,5 +25,7 @@ collaborationRoutes.get('/:id/changes', async c => {
   // Polling asks often and usually finds no change, so the document is loaded only when the revision moved.
   const row = await projectRow(c, c.req.param('id'), { document: false });
   const since = Number(c.req.query('since') ?? 0);
-  return c.json(row.revision === since ? { revision: row.revision, unchanged: true } : { revision: row.revision, project: serializeProject(await withDocument(c, row), origin(c)) });
+  if (row.revision === since) return c.json({ revision: row.revision, unchanged: true });
+  const loaded = await withDocument(c, row);
+  return c.json({ revision: loaded.revision, project: serializeProject(loaded, origin(c)) });
 });

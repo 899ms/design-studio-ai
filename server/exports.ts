@@ -81,7 +81,7 @@ exportRoutes.post('/:id/export', async c => renderProjectExport(c, c.req.param('
 export type SnapshotAssetResolver = (url: string) => Promise<{bytes: Uint8Array; mimeType: string}>;
 export async function renderProjectExport(c: Context<Env>, projectId: string, input: unknown, thumbnail = false, snapshot?: Awaited<ReturnType<typeof projectRow>>, inspection?: InspectionRenderOptions) {
   return withSpan(c, {kind:'export',action:thumbnail?'thumbnail.render':'export.render'}, async span => {
-    const owned = await projectRow(c, projectId), row = snapshot ?? owned, options = optionsSchema.parse(input);
+    const owned = await projectRow(c, projectId, snapshot ? { document: false } : {}), row = snapshot ?? owned, options = optionsSchema.parse(input);
     if (options.expectedRevision && options.expectedRevision !== row.revision) fail(409, 'revision_conflict', 'Save or reload the current revision before export.');
     span.event.projectId = row.id; span.event.action = thumbnail ? 'thumbnail.render' : `export.${options.format}`;
     await updateEvent(c.env, span.event);

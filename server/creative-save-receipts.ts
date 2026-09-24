@@ -18,10 +18,12 @@ export async function readCreativeReceipt(c: Context<Env>, projectId: string, id
   // receiptDetails holds caller data recorded at commit, such as a scene job's change summary.
   const project = JSON.parse(receipt.response) as Project & { receiptDetails?: Record<string, unknown>; storedDocument?: string; documentSuperseded?: true };
   if (project.storedDocument) {
-    // A later save deletes the object its revision replaced. The operation still committed, so the replay
-    // reports success with its revision and marks the document as superseded instead of failing.
+    // A later save deletes the object its revision replaced, yet the operation did commit.
     const json = await decodeDocument(c.env, JSON.stringify({ storedDocument: project.storedDocument }));
-    if (json === undefined) project.documentSuperseded = true; else project.document = JSON.parse(json);
+    if (json !== undefined) project.document = JSON.parse(json);
+    // Durable jobs need only the committed revision; a caller that consumes the document must re-read the project.
+    else if (identity.key.startsWith('job-')) project.documentSuperseded = true;
+    else fail(409, 'receipt_superseded', 'This operation committed, but a later save replaced its document. Read the project for the current state.');
     delete project.storedDocument;
   }
   return project;

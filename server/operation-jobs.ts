@@ -1,7 +1,7 @@
 import {Hono,type Context} from 'hono';
 import type {Env,Bindings} from './types';
 import {operationJobSchema,type OperationJob} from '../src/shared/operation-jobs';
-import {projectRow} from './projects';
+import {projectRow,withDocument} from './projects';
 import {paintHash} from '../src/shared/paint-png';
 import {fail,owner,rateLimit} from './security';
 export type JobRow={id:string;project_id:string;user_id:string;operation_id:string;payload_hash:string;kind:OperationJob['kind'];status:OperationJob['status'];stage:string;input_key:string;result_key:string|null;result_type:string|null;revision:number|null;error:string|null;lease:string|null;lease_until:number;created_at:number;updated_at:number};
@@ -18,7 +18,7 @@ operationRoutes.post('/:id/operations',async c=>{
  const count=await c.env.DB.prepare("SELECT COUNT(*) AS count FROM operation_jobs WHERE user_id=? AND status IN ('queued','running')").bind(owner(c)).first<{count:number}>();if((count?.count??0)>=4)fail(429,'operations_busy','Wait for a pending operation before starting another');
  const id=crypto.randomUUID(),inputKey=`${owner(c)}/${row.id}/operations/${id}/input`,now=Date.now();
  // Store the accepted export snapshot before dispatch; later project edits do not alter it.
- await c.env.ASSETS_BUCKET.put(inputKey,new TextEncoder().encode(JSON.stringify({request:body,snapshot:body.kind==='export'?row:undefined})),{httpMetadata:{contentType:'application/json'}});
+ await c.env.ASSETS_BUCKET.put(inputKey,new TextEncoder().encode(JSON.stringify({request:body,snapshot:body.kind==='export'?await withDocument(c,row):undefined})),{httpMetadata:{contentType:'application/json'}});
  let result;try{result=await c.env.DB.prepare('INSERT OR IGNORE INTO operation_jobs(id,project_id,user_id,operation_id,payload_hash,kind,input_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,row.id,owner(c),body.operationId,hash,body.kind,inputKey,now,now).run();}catch(e){await c.env.ASSETS_BUCKET.delete(inputKey);throw e;}
  if(!result.meta.changes)await c.env.ASSETS_BUCKET.delete(inputKey);
  job=await c.env.DB.prepare('SELECT * FROM operation_jobs WHERE project_id=? AND user_id=? AND operation_id=?').bind(row.id,owner(c),body.operationId).first<JobRow>();if(job!.payload_hash!==hash)fail(409,'operation_id_conflict','Operation ID belongs to a different request');await dispatchJob(c.env,job!.id);return c.json({operation:jobView(job!)},202);

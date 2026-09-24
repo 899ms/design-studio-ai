@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { app } from '../server/index';
+import { processOperation } from '../server/operation-worker';
 import { FileBucket, SqliteDatabase } from '../server/node-adapters';
 import { secret } from '../server/security';
 import { INLINE_DOCUMENT_BYTES } from '../server/stored-documents';
@@ -67,17 +68,27 @@ test('documents above the inline limit are stored compressed outside the databas
   assert.equal(JSON.parse(await column(created.id)).id, created.id, 'a small document is stored inline again');
   assert.equal((await storedObjects()).length, 0);
 
-  // Replaying an operation whose document a later save replaced still reports its committed revision.
+  // A later save replaces the object a receipt shares, so replaying it asks the caller to re-read the project.
   const replayed = { ...denseDocument('Dense', 4), id: created.id } as DesignDocument;
   const current = await projectFrom(await request(`/api/projects/${created.id}`));
   const committed = await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: replayed, expectedRevision: current.revision, operationId: 'dense-op' }));
   const replay = async () => projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: replayed, expectedRevision: current.revision, operationId: 'dense-op' }));
   assert.equal((await replay()).document.name, 'Dense');
   await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: { ...second, name: 'Dense later' }, expectedRevision: committed.revision }));
-  const superseded = await replay() as Project & { documentSuperseded?: boolean };
-  assert.equal(superseded.revision, committed.revision);
-  assert.equal(superseded.documentSuperseded, true);
-  assert.equal(superseded.document, undefined);
+  const superseded = await request(`/api/projects/${created.id}/document`, 'PUT', { document: replayed, expectedRevision: current.revision, operationId: 'dense-op' });
+  assert.equal(superseded.status, 409);
+  assert.match(await superseded.text(), /receipt_superseded/);
+
+  // A durable export pins the loaded document, not the pointer, so later saves cannot change or break it.
+  const pinned = await projectFrom(await request(`/api/projects/${created.id}`));
+  const queued = await request(`/api/projects/${created.id}/operations`, 'POST', { kind: 'export', operationId: 'dense-export', input: { format: 'json', expectedRevision: pinned.revision } });
+  assert.equal(queued.status, 202, await queued.text());
+  const job = (await db.prepare('SELECT id FROM operation_jobs WHERE operation_id=?').bind('dense-export').first<{ id: string }>())!;
+  await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: { ...second, name: 'Dense after export' }, expectedRevision: pinned.revision }));
+  await processOperation(env, job.id);
+  const exported = await request(`/api/projects/${created.id}/operations/dense-export/result`);
+  assert.equal(exported.status, 200, await exported.clone().text());
+  assert.equal(((await exported.json()) as DesignDocument).name, 'Dense later');
 
   // Publishing embeds the document in a D1 row, so an oversized one is refused plainly.
   const published = await request(`/api/projects/${created.id}/publish`, 'POST', {});
