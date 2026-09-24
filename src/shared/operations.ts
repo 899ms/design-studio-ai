@@ -1,6 +1,7 @@
 import { sceneCommandSchema } from './scene-authoring-schema';
 import {visitDocumentAssetIds} from './document-asset-references';
 import { applySceneCommand } from './scene-authoring';
+import { removeNodeTree } from './node-removal';
 import { paintingLayerOperationSchemas, isPaintingLayerOperation, applyPaintingLayerOperation } from './painting-layer-operations';
 import { diagramOperationSchemas, isDiagramOperation, applyDiagramOperation } from './diagram-operations';
 import { boardEditingSchemas, isBoardEditingOperation, applyBoardEditingOperation } from './board-editing';
@@ -179,11 +180,8 @@ export function mutateDocument(document: DesignDocument, input: unknown): Design
         const style = action.changes.style ? { ...node.style, ...action.changes.style } : node.style;
         Object.assign(node, action.changes, { style });
       } else {
-        const removed = new Set([action.nodeId]);
-        let grew = true;
-        while (grew) { grew = false; for (const node of page.nodes) if (node.parentId && removed.has(node.parentId) && !removed.has(node.id)) { removed.add(node.id); grew = true; } }
-        page.nodes = page.nodes.filter(n => !removed.has(n.id));
-        if (doc.timeline) doc.timeline.tracks = doc.timeline.tracks.filter(t => !removed.has(t.nodeId));
+        removeNodeTree(doc, page, action.nodeId);
+
       }
     }
   }

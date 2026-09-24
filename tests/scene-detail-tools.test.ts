@@ -69,6 +69,10 @@ test('light command adds, patches, clears fields and removes page lights', () =>
   doc = command(doc, { action: 'light', id: 'belly', remove: true });
   assert.equal(doc.pages[0].scene!.lights!.length, 7);
   assert.throws(() => command(doc, { action: 'light', id: 'belly', remove: true }), /Unknown light/);
+  doc = command(doc, { action: 'light', id: 'cone', type: 'spot', position: [0, 3, 0], intensity: 5, angle: .5 });
+  doc = command(doc, { action: 'light', id: 'l0', remove: true });
+  doc = command(doc, { action: 'light', id: 'cone', type: 'point' });
+  assert.equal(doc.pages[0].scene!.lights!.find(l => l.id === 'cone')!.angle, undefined, 'a point light drops the spot cone angle');
 });
 
 test('remove-node takes children, checkpoints and tracks but keeps shared rigs intact', () => {
@@ -82,6 +86,13 @@ test('remove-node takes children, checkpoints and tracks but keeps shared rigs i
   next = command(next, { action: 'remove-node', nodeId: 'cone' });
   assert.deepEqual(next.pages[0].nodes.map(n => n.id), ['head']);
   assert.deepEqual(next.timeline!.tracks, []);
+  const toggled = setup();
+  toggled.pages[0].nodes.push({ id: 'lamp', type: 'model3d', name: 'lamp', x: 0, y: 0, width: 400, height: 400, data: { geometry: 'sphere' } });
+  toggled.pages[0].nodes[0].interactions = [{ trigger: 'click', action: 'toggle', target: 'lamp' }];
+  const checkpointed = command(toggled, { action: 'checkpoint', nodeId: 'lamp', outputId: 'lamp-v1' });
+  const pruned = mutateDocument(checkpointed, [{ op: 'remove-node', nodeId: 'lamp' }]);
+  assert.deepEqual(pruned.pages[0].nodes.map(n => n.id), ['head'], 'the document operation also removes checkpoints');
+  assert.equal(pruned.pages[0].nodes[0].interactions, undefined, 'toggles that target the removed node are dropped');
   const shared = setup();
   shared.pages[0].nodes.push({ id: 'jaw', type: 'model3d', name: 'jaw', x: 0, y: 0, width: 400, height: 400, scene: { mesh: skinnedBox(), rigId: 'head', bones: structuredClone(shared.pages[0].nodes[0].scene!.bones) } });
   assert.throws(() => command(shared, { action: 'remove-node', nodeId: 'head' }), /Remove jaw first/);
@@ -130,4 +141,32 @@ test('sculpt keeps seams closed, mirrors across x and brushes along a path', () 
   const stroked = command(subdivided, { action: 'sculpt', nodeId: 'head', center: [-.5, .5, 0], path: [[.5, .5, 0]], radius: .2, strength: 1, mode: 'move', delta: [0, .1, 0] });
   assert.ok(top(stroked) > top(dabbed) * 2, 'a path raises the whole ridge, not one spot');
   assert.throws(() => command(subdivided, { action: 'sculpt', nodeId: 'head', center: [0, 0, 0], path: [[100, 0, 0]], radius: .01, mode: 'move' }), /path is too long/);
+  const started = Date.now();
+  assert.throws(() => command(subdivided, { action: 'sculpt', nodeId: 'head', center: [-1e5, 0, 0], path: [[1e5, 0, 0]], radius: .0001, mode: 'move' }), /path is too long/);
+  assert.ok(Date.now() - started < 1000, 'the dab count is checked before any dab is created');
+  // A vertex on the mirror plane inside both brushes moves as far as one brush would move it.
+  const lift = (symmetry: boolean) => { const p = command(subdivided, { action: 'sculpt', nodeId: 'head', center: [.001, .5, 0], radius: .3, strength: 1, mode: 'move', delta: [0, .1, 0], symmetry }).pages[0].nodes[0].scene!.mesh!.positions; return Math.max(...Array.from({ length: p.length / 3 }, (_, i) => Math.abs(p[i * 3]) < 1e-9 && Math.abs(p[i * 3 + 2]) < 1e-9 ? p[i * 3 + 1] : -Infinity)); };
+  assert.ok(Math.abs(lift(true) - lift(false)) < 1e-6);
+});
+
+test('sculpt refuses strokes that would sweep a dense mesh hundreds of times', () => {
+  const geometry = new T.SphereGeometry(1, 256, 128), dense = meshData(geometry);
+  geometry.dispose();
+  const path = Array.from({ length: 63 }, (_, i) => [i % 2 ? -1 : 1, 0, 0]);
+  assert.throws(() => command(setup(dense), { action: 'sculpt', nodeId: 'head', center: [-1, 0, 0], path, radius: 1.5, mode: 'inflate' }), /covers too much of the mesh/);
+});
+
+test('smooth subdivision and sculpting shade UV seams as one surface', () => {
+  const key = (p: number[], i: number) => p.slice(i * 3, i * 3 + 3).map(v => Math.round(v * 1e5)).join(',');
+  const seamNormals = (mesh: MeshData) => { const groups = new Map<string, number[][]>(); for (let i = 0; i < mesh.positions.length / 3; i++) { const list = groups.get(key(mesh.positions, i)) ?? []; list.push(mesh.normals!.slice(i * 3, i * 3 + 3)); groups.set(key(mesh.positions, i), list); } return [...groups.values()].filter(list => list.length > 1); };
+  const smooth = command(setup(), { action: 'subdivide', nodeId: 'head', iterations: 2 });
+  const mesh = smooth.pages[0].nodes[0].scene!.mesh!;
+  assert.equal(mesh.normals!.length, mesh.positions.length);
+  const seams = seamNormals(mesh);
+  assert.ok(seams.length > 0);
+  for (const list of seams) for (const normal of list) assert.ok(normal.every((v, a) => Math.abs(v - list[0][a]) < 1e-6), 'coincident vertices share a normal');
+  const sculpted = command(smooth, { action: 'sculpt', nodeId: 'head', center: [.3, .3, .3], radius: .4, strength: 1, mode: 'inflate' }).pages[0].nodes[0].scene!.mesh!;
+  for (const list of seamNormals(sculpted)) for (const normal of list) assert.ok(normal.every((v, a) => Math.abs(v - list[0][a]) < 1e-6), 'sculpting keeps welded seams smooth');
+  const hard = command(setup(), { action: 'subdivide', nodeId: 'head', smooth: false }).pages[0].nodes[0].scene!.mesh!;
+  assert.equal(hard.normals, undefined, 'linear subdivision leaves a mesh without authored normals as it was');
 });

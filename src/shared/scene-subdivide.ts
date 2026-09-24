@@ -83,5 +83,7 @@ function subdivideOnce(mesh: MeshData, smooth: boolean) {
 /** Refine a mesh into four triangles per face per iteration; smooth applies Loop rules, otherwise the shape is kept. */
 export function subdivide(mesh: MeshData, iterations: number, smooth: boolean) {
   for (let step = 0; step < iterations; step++) subdivideOnce(mesh, smooth);
-  refreshMeshShading(mesh);
+  // A smoothed surface gets welded normals; otherwise the renderer would shade each UV seam as a crease.
+  if (smooth) mesh.normals ??= [];
+  refreshMeshShading(mesh, false, smooth ? 'all' : 'none');
 }

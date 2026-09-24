@@ -13,6 +13,7 @@ import { applyBoneLimits, bind, limitedRotation, mirrorPose, mirrorWeights, norm
 import { packUV } from './scene-uv';
 import { applyPageCommand } from './scene-page-authoring';
 import { subdivide } from './scene-subdivide';
+import { removeNodeTree } from './node-removal';
 import { terrainMesh } from './scene-terrain';
 export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCommand){
   const command=sceneCommandSchema.parse(input),page=doc.pages.find(p=>p.id===pageId);if(!page)throw new Error('Unknown page');
@@ -22,13 +23,7 @@ export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCo
   if(command.action==='loft'){add(command.outputId,loft(command.rings,command.segments),command.color);return;}
   if(command.action==='share-rig'){shareRig(doc,pageId,command.nodeId);return;}
   if(command.action==='camera'||command.action==='camera-key'||command.action==='environment'||command.action==='emitter'||command.action==='remove-emitter'||command.action==='light'){applyPageCommand(doc,pageId,command);return;}
-  if(command.action==='remove-node'){
-    if(!page.nodes.some(n=>n.id===command.nodeId))throw new Error('Unknown node');
-    // Children and hidden checkpoints go with the node; meshes that still share its rig must be removed first.
-    const removed=new Set([command.nodeId]);let grew=true;while(grew){grew=false;for(const n of page.nodes)if(!removed.has(n.id)&&((n.parentId&&removed.has(n.parentId))||removed.has(String(n.data?.checkpointOf??'')))){removed.add(n.id);grew=true;}}
-    const dependent=page.nodes.find(n=>!removed.has(n.id)&&(removed.has(n.scene?.rigId??'')||removed.has(String(n.data?.rigSourceId??''))));if(dependent)throw new Error(`Remove ${dependent.id} first; it uses this rig`);
-    page.nodes=page.nodes.filter(n=>!removed.has(n.id));if(doc.timeline)doc.timeline.tracks=doc.timeline.tracks.filter(t=>!removed.has(t.nodeId));return;
-  }
+  if(command.action==='remove-node'){removeNodeTree(doc,page,command.nodeId);return;}
   if(command.action==='terrain'){const mesh=terrainMesh(command);add(command.outputId,mesh,mesh.colors?'#FFFFFF':command.color);const terrain=page.nodes.at(-1)!;terrain.name='Terrain';terrain.scene!.position=command.position;terrain.scene!.material!.roughness=.9;return;}
   const node=find(command.nodeId);node.scene??={};const scene=node.scene;
   if(command.action==='checkpoint'){if(page.nodes.some(n=>n.id===command.outputId))throw new Error('Checkpoint ID already exists');page.nodes.push({...structuredClone(node),id:command.outputId,name:`Checkpoint: ${node.name}`,visible:false,locked:true,data:{...node.data,checkpointOf:node.id}});return;}

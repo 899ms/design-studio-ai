@@ -66,6 +66,8 @@ export function applyPageCommand(doc: DesignDocument, pageId: string, command: P
       if (index < 0 && lights.length >= 8) throw new Error('A page holds at most 8 extra lights');
       const { action, remove, ...patch } = command, light: Record<string, unknown> = { ...lights[index] };
       for (const [key, value] of Object.entries(patch)) if (value === null) delete light[key]; else if (value !== undefined) light[key] = value;
+      // A cone angle only means something on a spot light.
+      if (light.type !== 'spot') delete light.angle;
       if (index < 0) { light.color ??= '#ffffff'; if (!light.type || !light.position || light.intensity === undefined) throw new Error('A new light needs type, position and intensity'); }
       if (index < 0) lights.push(light); else lights[index] = light;
     }
