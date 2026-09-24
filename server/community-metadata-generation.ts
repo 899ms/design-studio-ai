@@ -7,7 +7,7 @@ import { isTextProvider, textProviderSchema } from '../src/shared/providers';
 import { completeText } from './providers';
 import { communityRateLimit } from './community-access';
 import { fail, owner } from './security';
-import { decodeDocument } from './stored-documents';
+import { loadDocument } from './stored-documents';
 
 /** Summarize an already projected design without serializing source or media URLs. */
 function designContext(document: DesignDocument) {
@@ -40,8 +40,9 @@ export async function generateCommunityMetadata(c: Context<Env>, input: unknown)
     return row;
   };
   const row = await readRevision();
+  const source = await loadDocument(c.env, row.document);
   let context: ReturnType<typeof designContext>;
-  try { context = designContext(communityProjection(documentSchema.parse(JSON.parse((await decodeDocument(c.env, row.document)) ?? ''))).document); }
+  try { context = designContext(communityProjection(documentSchema.parse(JSON.parse(source))).document); }
   catch { fail(400,'unsafe_projection','The saved design cannot be safely reviewed for Community. Repair its visible dependencies and save it before generating.'); }
   let provider = body.provider;
   if (!provider) {

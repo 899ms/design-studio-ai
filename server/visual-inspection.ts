@@ -30,7 +30,7 @@ async function inspectProject(c: Context<Env>, row: ProjectRow, options: VisualI
   const layout = inspectionLayout(doc, render);
   const response = await renderProjectExport(c, row.id, { format: 'png', pageIndex: pageIndices[0], expectedRevision: row.revision }, false, snapshot, render);
   // Do not present a stale image as the current saved design if an edit raced the render.
-  const latest = await projectRow(c, row.id);
+  const latest = await projectRow(c, row.id, { document: false });
   if (latest.thumbnail_deleting) fail(404, 'not_found', 'Project not found.');
   if (latest.revision !== row.revision) fail(409, 'revision_conflict', 'The design changed during inspection. Read and inspect the new revision.');
   const offset = options.mode === 'page' ? pageIndex : options.offset;

@@ -19,7 +19,7 @@ type BriefWrite = z.infer<typeof writeSchema>;
 type Answer = DesignBrief['answers'][string];
 
 export async function readBrief(c: Context<Env>, projectId: string): Promise<DesignBrief | null> {
-  await projectRow(c, projectId);
+  await projectRow(c, projectId, { document: false });
   const row = await c.env.DB.prepare('SELECT brief FROM design_briefs WHERE project_id=? AND user_id=?').bind(projectId, owner(c)).first<{ brief: string }>();
   return row ? JSON.parse(row.brief) as DesignBrief : null;
 }

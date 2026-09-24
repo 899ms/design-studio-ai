@@ -16,12 +16,12 @@ export async function readCreativeReceipt(c: Context<Env>, projectId: string, id
   if (!receipt) return undefined;
   if (receipt.payload_hash !== identity.hash) fail(409, 'operation_id_conflict', 'This operation ID already committed a different payload. Read its result before starting a new operation.');
   // receiptDetails holds caller data recorded at commit, such as a scene job's change summary.
-  const project = JSON.parse(receipt.response) as Project & { receiptDetails?: Record<string, unknown>; storedDocument?: string };
+  const project = JSON.parse(receipt.response) as Project & { receiptDetails?: Record<string, unknown>; storedDocument?: string; documentSuperseded?: true };
   if (project.storedDocument) {
-    // A later save deletes the object its revision replaced, so only the latest receipt can replay a stored document.
+    // A later save deletes the object its revision replaced. The operation still committed, so the replay
+    // reports success with its revision and marks the document as superseded instead of failing.
     const json = await decodeDocument(c.env, JSON.stringify({ storedDocument: project.storedDocument }));
-    if (json === undefined) fail(409, 'receipt_superseded', 'This operation committed, but a later save replaced its document. Read the project for the current state.');
-    project.document = JSON.parse(json!);
+    if (json === undefined) project.documentSuperseded = true; else project.document = JSON.parse(json);
     delete project.storedDocument;
   }
   return project;

@@ -6,7 +6,7 @@ import type { Env } from './types';
 
 export const thumbnailRoutes = new Hono<Env>();
 thumbnailRoutes.get('/:id/thumbnail', async c => {
-  const project = await projectRow(c, c.req.param('id'));
+  const project = await projectRow(c, c.req.param('id'), { document: false });
   if (project.thumbnail_deleting) fail(404, 'not_found', 'Project not found.');
   const revision = Number(c.req.query('revision') ?? project.revision);
   if (!Number.isSafeInteger(revision) || revision < 1 || revision > project.revision) fail(400, 'invalid_revision', 'Use a saved project revision.');

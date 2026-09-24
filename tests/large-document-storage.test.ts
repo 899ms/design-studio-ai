@@ -67,6 +67,31 @@ test('documents above the inline limit are stored compressed outside the databas
   assert.equal(JSON.parse(await column(created.id)).id, created.id, 'a small document is stored inline again');
   assert.equal((await storedObjects()).length, 0);
 
+  // Replaying an operation whose document a later save replaced still reports its committed revision.
+  const replayed = { ...denseDocument('Dense', 4), id: created.id } as DesignDocument;
+  const current = await projectFrom(await request(`/api/projects/${created.id}`));
+  const committed = await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: replayed, expectedRevision: current.revision, operationId: 'dense-op' }));
+  const replay = async () => projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: replayed, expectedRevision: current.revision, operationId: 'dense-op' }));
+  assert.equal((await replay()).document.name, 'Dense');
+  await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: { ...second, name: 'Dense later' }, expectedRevision: committed.revision }));
+  const superseded = await replay() as Project & { documentSuperseded?: boolean };
+  assert.equal(superseded.revision, committed.revision);
+  assert.equal(superseded.documentSuperseded, true);
+  assert.equal(superseded.document, undefined);
+
+  // Publishing embeds the document in a D1 row, so an oversized one is refused plainly.
+  const published = await request(`/api/projects/${created.id}/publish`, 'POST', {});
+  assert.equal(published.status, 413, await published.clone().text());
+
+  // When D1 reports a failure after committing, the object the row now references survives.
+  const latest = await projectFrom(await request(`/api/projects/${created.id}`));
+  const flaky: Bindings = { ...env, DB: { prepare: sql => db.prepare(sql), exec: sql => db.exec(sql), batch: async statements => { await db.batch(statements); throw new Error('Network connection lost'); } } };
+  const ambiguous = await app.request(`${origin}/api/projects/${created.id}/document`, { method: 'PUT', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ document: { ...second, name: 'Dense ambiguous' }, expectedRevision: latest.revision }) }, flaky);
+  assert.equal(ambiguous.status, 500);
+  assert.equal((await projectFrom(await request(`/api/projects/${created.id}`))).document.name, 'Dense ambiguous');
+  await projectFrom(await request(`/api/projects/${created.id}/document`, 'PUT', { document: small, expectedRevision: latest.revision + 1 }));
+  assert.equal((await storedObjects()).length, 0);
+
   // Deleting a project removes its stored document.
   const other = await projectFrom(await request('/api/projects', 'POST', { name: 'Dense two', kind: '3d', document: denseDocument('Dense two', 3) }), 201);
   assert.equal((await storedObjects()).length, 1);
