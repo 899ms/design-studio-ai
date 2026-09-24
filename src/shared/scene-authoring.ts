@@ -12,6 +12,8 @@ import { loft, relax, remesh } from './scene-mesh-topology';
 import { applyBoneLimits, bind, limitedRotation, mirrorPose, mirrorWeights, normalizeWeights, quadruped, smoothWeights, solveIK } from './scene-rigging';
 import { packUV } from './scene-uv';
 import { applyPageCommand } from './scene-page-authoring';
+import { subdivide } from './scene-subdivide';
+import { removeNodeTree } from './node-removal';
 import { terrainMesh } from './scene-terrain';
 export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCommand){
   const command=sceneCommandSchema.parse(input),page=doc.pages.find(p=>p.id===pageId);if(!page)throw new Error('Unknown page');
@@ -20,8 +22,9 @@ export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCo
   if(command.action==='remesh'){if(new Set(command.nodeIds).size!==command.nodeIds.length)throw new Error('Choose each remesh source once');const sources=command.nodeIds.map(find);if(sources.some(n=>n.scene?.bones?.length||n.scene?.rigId))throw new Error('Remesh unrigged sources only');const mesh=remesh(sources.map(n=>({...n,scene:{...n.scene,position:n.scene?.position??[(n.x+n.width/2-page.width/2)/240,(page.height/2-n.y-n.height/2)/240,Number(n.data?.z??0)],scale:n.scene?.scale??[n.width/400,n.height/400,Number(n.data?.depth??n.width)/400]}})),command.resolution,command.symmetry,command.blend);add(command.outputId,mesh,sources[0].scene?.material?.color??'#D89B55');sources.forEach(n=>n.visible=false);return;}
   if(command.action==='loft'){add(command.outputId,loft(command.rings,command.segments),command.color);return;}
   if(command.action==='share-rig'){shareRig(doc,pageId,command.nodeId);return;}
-  if(command.action==='camera'||command.action==='camera-key'||command.action==='environment'||command.action==='emitter'||command.action==='remove-emitter'){applyPageCommand(doc,pageId,command);return;}
-  if(command.action==='terrain'){add(command.outputId,terrainMesh(command),command.color);const terrain=page.nodes.at(-1)!;terrain.name='Terrain';terrain.scene!.position=command.position;terrain.scene!.material!.roughness=.9;return;}
+  if(command.action==='camera'||command.action==='camera-key'||command.action==='environment'||command.action==='emitter'||command.action==='remove-emitter'||command.action==='light'){applyPageCommand(doc,pageId,command);return;}
+  if(command.action==='remove-node'){removeNodeTree(doc,page,command.nodeId);return;}
+  if(command.action==='terrain'){const mesh=terrainMesh(command);add(command.outputId,mesh,mesh.colors?'#FFFFFF':command.color);const terrain=page.nodes.at(-1)!;terrain.name='Terrain';terrain.scene!.position=command.position;terrain.scene!.material!.roughness=.9;return;}
   const node=find(command.nodeId);node.scene??={};const scene=node.scene;
   if(command.action==='checkpoint'){if(page.nodes.some(n=>n.id===command.outputId))throw new Error('Checkpoint ID already exists');page.nodes.push({...structuredClone(node),id:command.outputId,name:`Checkpoint: ${node.name}`,visible:false,locked:true,data:{...node.data,checkpointOf:node.id}});return;}
   if(command.action==='material'){const {action,nodeId,opacity,...patch}=command,material:Record<string,unknown>={...scene.material};for(const [key,value] of Object.entries(patch))if(value===null)delete material[key];else if(value!==undefined)material[key]=value;scene.material=Object.keys(material).length?material:undefined;if(opacity!==undefined)node.opacity=opacity;return;}
@@ -43,9 +46,10 @@ export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCo
   if(['pose','ik','clip'].includes(command.action)&&scene.rigId){applySceneCommand(doc,pageId,{...command,nodeId:rigOwner(node,doc).id} as SceneCommand);return;}
   const mesh=scene.mesh;if(!mesh)throw new Error('Convert the primitive to mesh first');
   if(command.action==='weight-brush'){const bones=rigOwner(node,doc).scene?.bones??[],bone=bones.findIndex(b=>b.name===command.bone);if(bone<0||command.lockedBones.some(name=>!bones.some(b=>b.name===name)))throw new Error('Unknown bone');paintWeights(mesh,bone,command.center,command.radius,command.strength,command.mode,command.lockedBones.map(name=>bones.findIndex(b=>b.name===name)),command.lockedVertices);if(command.mirrorBone){const opposite=bones.findIndex(b=>b.name===command.mirrorBone);if(opposite<0)throw new Error('Unknown mirrored joint');paintWeights(mesh,opposite,[-command.center[0],command.center[1],command.center[2]],command.radius,command.strength,command.mode,command.lockedBones.map(name=>bones.findIndex(b=>b.name===name)),command.lockedVertices);}}
-  if(command.action==='sculpt')sculpt(mesh,command.center,command.radius,command.strength,command.mode,command.delta);
+  if(command.action==='sculpt')sculpt(mesh,command.center,command.radius,command.strength,command.mode,command.delta,{path:command.path,symmetry:command.symmetry});
   if(command.action==='insert-loop')insertLoop(mesh,(['x','y','z'].indexOf(command.axis)) as 0|1|2,command.offset);
   if(command.action==='split-edges')splitEdges(mesh,command.edges);
+  if(command.action==='subdivide')subdivide(mesh,command.iterations,command.smooth);
   if(command.action==='relax'){if(mesh.skinIndices||mesh.morphTargets?.length)throw new Error('Finish topology before binding or adding morph targets');relax(mesh,command.iterations,command.strength);}
   if(command.action==='rig-quadruped'){if(mesh.skinIndices||scene.bones?.length)throw new Error('Unbind and remove the old rig before creating a replacement');scene.bones=quadruped(mesh,command.landmarks);}
   if(command.action==='rig-winged-quadruped'){if(mesh.skinIndices||scene.bones?.length||scene.rigId)throw new Error('Unbind and remove the old rig before creating a replacement');scene.bones=wingedQuadruped(mesh,command.landmarks);}

@@ -105,6 +105,7 @@ export async function buildScene(doc: DesignDocument, pageIndex = 0, time = 0) {
     }
     if (object instanceof THREE.Mesh && object.morphTargetDictionary && object.morphTargetInfluences) for (const [name, index] of Object.entries(object.morphTargetDictionary)) object.morphTargetInfluences[index] = n.scene?.morphWeights?.[name] ?? 0;
     object.name = n.id; object.visible = n.visible !== false; if (materialConfig?.bloom === false) object.traverse(child => { child.userData.bloom = false; });
+    if (materialConfig?.fog === false) object.traverse(child => { if (child instanceof THREE.Mesh) for (const material of [child.material].flat()) material.fog = false; });
     object.position.fromArray(n.scene?.position ?? [(n.x + n.width / 2 - page.width / 2) / 240, (page.height / 2 - n.y - n.height / 2) / 240, Number(n.data?.z ?? 0)]);
     const rotation = n.scene?.rotation ?? [Number(n.data?.rotationX ?? 0), Number(n.data?.rotationY ?? 0), n.rotation ?? 0]; object.rotation.set(...rotation.map(v => v * Math.PI / 180) as [number, number, number]);
     object.scale.fromArray(n.scene?.scale ?? [n.width / 400, n.height / 400, Number(n.data?.depth ?? n.width) / 400]);
