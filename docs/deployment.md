@@ -115,7 +115,7 @@ Custom provider connections require their exact HTTPS origin in `PROVIDER_ALLOWE
 
 ## Backups and rollback
 
-Back up relational data, binary assets, and the encryption secret together. Stop Node writes before copying SQLite/files, or use a SQLite-consistent backup procedure; copying only an active database file may miss journaled changes. Use D1 backup/export and R2 object backups for Cloudflare. Missing assets or encryption keys cannot be repaired by a database-only restore.
+Back up relational data, binary assets, and the encryption secret together. Stop Node writes before copying SQLite/files, or use a SQLite-consistent backup procedure; copying only an active database file may miss journaled changes. Use D1 backup/export and R2 object backups for Cloudflare. Large project documents are stored as bucket objects under `documents/`, so a database-only restore also loses them. Missing assets or encryption keys cannot be repaired by a database-only restore.
 
 Roll code back to a known deployment while preserving data and checking schema compatibility. Migrations are not automatically reversed. Rotate exposed API/provider tokens independently of the storage encryption key. Stop development/test processes started for verification when their work finishes.
 

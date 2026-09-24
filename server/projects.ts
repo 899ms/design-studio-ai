@@ -17,6 +17,7 @@ import {characterEvolutionErrors} from '../src/shared/character-validation';
 import { inspectMotion, motionInspectionSchema } from '../src/shared/motion-inspection';
 import { documentChanges, projectSummary, responseModeSchema, summarizeScene } from '../src/shared/document-change-summary';
 import { updateEvent } from './observability-store';
+import { decodeDocument, discardDocument, encodeDocument, storedDocumentKey } from './stored-documents';
 import { Hono } from "hono";
 import { z } from "zod";
 import { documentSchema, type DesignDocument } from "../src/shared/schema";
@@ -39,6 +40,8 @@ export interface ProjectRow {
   published_slug: string | null;
   thumbnail_revision?: number | null;
   thumbnail_deleting?: number;
+  /** The raw column value when the document lives in R2; `document` then holds the loaded JSON. */
+  stored_document?: string;
 }
 export async function projectRow(c: Context<Env>, projectId: string) {
   const row = await c.env.DB.prepare(
@@ -47,6 +50,12 @@ export async function projectRow(c: Context<Env>, projectId: string) {
     .bind(projectId, owner(c))
     .first<ProjectRow>();
   if (!row) fail(404, "not_found", "Project not found.");
+  if (storedDocumentKey(row!.document)) {
+    const json = await decodeDocument(c.env, row!.document);
+    if (json === undefined) fail(500, 'document_unavailable', 'The stored project document could not be read.');
+    row!.stored_document = row!.document;
+    row!.document = json!;
+  }
   const span = c.get('telemetrySpan');
   if (span && span.event.projectId !== row!.id) { span.event.projectId = row!.id; await updateEvent(c.env, span.event); }
   return row!;
@@ -116,11 +125,12 @@ export async function saveDocument(
   parsed.metadata.updatedAt = now();
   // Server-generated or restored asset references must obey the same canonical limits.
   parsed = documentSchema.parse(parsed);
+  const json = JSON.stringify(parsed), value = await encodeDocument(c.env, row.id, json), storedKey = storedDocumentKey(value);
   const statement = c.env.DB.prepare(
     "UPDATE projects SET document=?,name=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=? AND revision=? AND (? IS NULL OR COALESCE((SELECT revision FROM design_briefs WHERE project_id=projects.id AND user_id=projects.user_id),0)=?)",
   )
     .bind(
-      JSON.stringify(parsed),
+      value,
       parsed.name,
       parsed.metadata.updatedAt,
       row.id,
@@ -128,12 +138,19 @@ export async function saveDocument(
       row.revision,
       expectedBriefRevision ?? null, expectedBriefRevision ?? null,
     );
-  const committed = serializeProject({ ...row, document: JSON.stringify(parsed), name: parsed.name, revision: row.revision + 1, updated_at: parsed.metadata.updatedAt }, origin(c));
-  const results = await c.env.DB.batch([statement, ...(identity ? [
-    c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(receiptDetails ? { ...committed, receiptDetails } : committed), Date.now()),
-    c.env.DB.prepare("DELETE FROM creative_save_receipts WHERE project_id=? AND user_id=? AND operation_id NOT LIKE 'job-%' AND operation_id NOT IN (SELECT operation_id FROM creative_save_receipts WHERE project_id=? AND user_id=? ORDER BY revision DESC LIMIT 8)").bind(row.id, owner(c), row.id, owner(c)),
-  ] : [])]);
+  const committed = serializeProject({ ...row, document: json, name: parsed.name, revision: row.revision + 1, updated_at: parsed.metadata.updatedAt }, origin(c));
+  // A stored document is referenced from the receipt too, so the receipt row stays within D1's limit.
+  const receipt = { ...committed, ...(storedKey ? { document: undefined, storedDocument: storedKey } : {}), ...(receiptDetails ? { receiptDetails } : {}) };
+  let results: unknown[];
+  try {
+    results = await c.env.DB.batch([statement, ...(identity ? [
+      c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(receipt), Date.now()),
+      c.env.DB.prepare("DELETE FROM creative_save_receipts WHERE project_id=? AND user_id=? AND operation_id NOT LIKE 'job-%' AND operation_id NOT IN (SELECT operation_id FROM creative_save_receipts WHERE project_id=? AND user_id=? ORDER BY revision DESC LIMIT 8)").bind(row.id, owner(c), row.id, owner(c)),
+    ] : [])]);
+  } catch (error) { await discardDocument(c.env, value); throw error; }
   const result = results[0] as { meta?: { changes?: number } };
+  // Only the winning save owns its stored object; the replaced revision's object is no longer referenced by the row.
+  await discardDocument(c.env, result.meta?.changes ? row.stored_document : value);
   if (!result.meta?.changes && identity){const receipt=await readCreativeReceipt(c,row.id,identity);if(receipt)return receipt;}
   if (!result.meta?.changes)
     fail(409, "revision_conflict", "Project changed. Reload before saving.");
@@ -295,6 +312,7 @@ projectRoutes.post("/", async (c) => {
   const parsed = documentSchema.parse(doc);
   const sourceRefs = await validateAssets(c, parsed);
   const time = now();
+  let stored = await encodeDocument(c.env, projectId, JSON.stringify(parsed));
   await c.env.DB.prepare(
     "INSERT INTO projects(id,user_id,name,description,kind,document,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)",
   )
@@ -304,11 +322,12 @@ projectRoutes.post("/", async (c) => {
       body.name,
       body.description,
       body.kind,
-      JSON.stringify(parsed),
+      stored,
       time,
       time,
     )
-    .run();
+    .run()
+    .catch(async error => { await discardDocument(c.env, stored); throw error; });
   try {
     const mapping = new Map<string, Awaited<ReturnType<typeof storeAsset>>>();
     for (const sourceId of sourceRefs) {
@@ -321,12 +340,17 @@ projectRoutes.post("/", async (c) => {
     if (mapping.size) remapDocumentAssets(parsed, mapping);
     await preparePaintingAssets(c, projectId, parsed);
     if (mapping.size || parsed.schemaVersion === 2) {
-      await c.env.DB.prepare('UPDATE projects SET document=? WHERE id=? AND user_id=?').bind(JSON.stringify(documentSchema.parse(parsed)), projectId, owner(c)).run();
+      const remapped = await encodeDocument(c.env, projectId, JSON.stringify(documentSchema.parse(parsed)));
+      await c.env.DB.prepare('UPDATE projects SET document=? WHERE id=? AND user_id=?').bind(remapped, projectId, owner(c)).run()
+        .catch(async error => { await discardDocument(c.env, remapped); throw error; });
+      await discardDocument(c.env, stored);
+      stored = remapped;
     }
   } catch (error) {
     const copied = await c.env.DB.prepare('SELECT storage_key FROM assets WHERE project_id=? AND user_id=?').bind(projectId, owner(c)).all<{storage_key:string}>();
     await c.env.DB.prepare('DELETE FROM projects WHERE id=? AND user_id=?').bind(projectId, owner(c)).run();
     for (const asset of copied.results) await c.env.ASSETS_BUCKET.delete(asset.storage_key);
+    await discardDocument(c.env, stored);
     throw error;
   }
   return c.json(
@@ -353,19 +377,22 @@ projectRoutes.patch("/:id", async (c) => {
   const doc = JSON.parse(row.document);
   doc.name = body.name ?? row.name;
   doc.metadata.updatedAt = now();
+  const value = await encodeDocument(c.env, row.id, JSON.stringify(doc));
   const result = await c.env.DB.prepare(
     "UPDATE projects SET name=?,description=?,document=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=? AND revision=?",
   )
     .bind(
       doc.name,
       body.description ?? row.description,
-      JSON.stringify(doc),
+      value,
       now(),
       row.id,
       owner(c),
       row.revision,
     )
-    .run();
+    .run()
+    .catch(async error => { await discardDocument(c.env, value); throw error; });
+  await discardDocument(c.env, result.meta.changes ? row.stored_document : value);
   if (!result.meta.changes)
     fail(409, "revision_conflict", "Project changed. Try again.");
   return c.json({
@@ -402,6 +429,7 @@ projectRoutes.delete("/:id", async (c) => {
     .run();
   for (const asset of assets.results)
     await c.env.ASSETS_BUCKET.delete(asset.storage_key);
+  await discardDocument(c.env, row.stored_document);
   return c.json({ ok: true });
 });
 projectRoutes.post("/:id/assets", async (c) => {

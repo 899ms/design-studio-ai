@@ -16,6 +16,9 @@ function weldNormals(positions: number[], normals: ArrayLike<number>, previous?:
   return result;
 }
 
+/** Unit vectors need four decimals (under 0.01 degrees of error); float noise beyond that only bloats stored documents. */
+const quantize = (value: number) => Math.round(value * 1e4) / 1e4;
+
 /** Refresh authored shading buffers after a geometry or UV edit; `weld` joins normals across seams ('smooth' keeps hard edges). */
 export function refreshMeshShading(mesh: MeshData, preserveNormals = false, weld: 'none' | 'all' | 'smooth' = 'none') {
   if (!mesh.normals && !mesh.tangents) return;
@@ -27,14 +30,14 @@ export function refreshMeshShading(mesh: MeshData, preserveNormals = false, weld
     if (preserveNormals && mesh.normals) geometry.setAttribute('normal', new Float32BufferAttribute(mesh.normals, 3));
     else {
       geometry.computeVertexNormals();
-      mesh.normals = weld === 'none' ? Array.from(geometry.getAttribute('normal').array) : weldNormals(mesh.positions, geometry.getAttribute('normal').array, previous);
+      mesh.normals = (weld === 'none' ? Array.from(geometry.getAttribute('normal').array) : weldNormals(mesh.positions, geometry.getAttribute('normal').array, previous)).map(quantize);
       geometry.setAttribute('normal', new Float32BufferAttribute(mesh.normals, 3));
     }
     if (mesh.tangents) {
       if (!mesh.uv) { delete mesh.tangents; return; }
       geometry.setAttribute('uv', new Float32BufferAttribute(mesh.uv, 2));
       geometry.computeTangents();
-      mesh.tangents = Array.from(geometry.getAttribute('tangent').array);
+      mesh.tangents = Array.from(geometry.getAttribute('tangent').array, quantize);
     }
   } finally { geometry.dispose(); }
 }

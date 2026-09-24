@@ -165,6 +165,8 @@ test('smooth subdivision and sculpting shade UV seams as one surface', () => {
   const seams = seamNormals(mesh);
   assert.ok(seams.length > 0);
   for (const list of seams) for (const normal of list) assert.ok(normal.every((v, a) => Math.abs(v - list[0][a]) < 1e-6), 'coincident vertices share a normal');
+  assert.ok(mesh.normals!.every(v => Math.round(v * 1e4) / 1e4 === v), 'stored normals carry no float noise past four decimals');
+  for (let i = 0; i < mesh.normals!.length; i += 3) assert.ok(Math.abs(Math.hypot(...mesh.normals!.slice(i, i + 3)) - 1) < 1e-3, 'quantized normals stay unit length');
   const sculpted = command(smooth, { action: 'sculpt', nodeId: 'head', center: [.3, .3, .3], radius: .4, strength: 1, mode: 'inflate' }).pages[0].nodes[0].scene!.mesh!;
   for (const list of seamNormals(sculpted)) for (const normal of list) assert.ok(normal.every((v, a) => Math.abs(v - list[0][a]) < 1e-6), 'sculpting keeps welded seams smooth');
   const hard = command(setup(), { action: 'subdivide', nodeId: 'head', smooth: false }).pages[0].nodes[0].scene!.mesh!;
