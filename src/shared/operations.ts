@@ -68,7 +68,7 @@ function convertChildrenToAbsolute(doc: DesignDocument, page: DesignPage, parent
 export function mutateDocument(document: DesignDocument, input: unknown): DesignDocument {
   const operations = operationsSchema.parse(input);
   let doc = structuredClone(document);
-  for (const action of operations) {
+  for (const [index, action] of operations.entries()) try {
     if (isPaintingLayerOperation(action)) doc = applyPaintingLayerOperation(doc, action);
     else if (isDiagramOperation(action)) doc = applyDiagramOperation(doc, action);
     else if (isBoardEditingOperation(action)) doc = applyBoardEditingOperation(doc, action);
@@ -181,9 +181,12 @@ export function mutateDocument(document: DesignDocument, input: unknown): Design
         Object.assign(node, action.changes, { style });
       } else {
         removeNodeTree(doc, page, action.nodeId);
-
       }
     }
+  } catch (error) {
+    // In a batch, name the operation that failed; validation errors keep their own paths.
+    if (operations.length > 1 && error instanceof Error && !(error instanceof z.ZodError)) throw new Error(`Operation ${index + 1}: ${error.message}`);
+    throw error;
   }
   const evolution=characterEvolutionErrors(document.characters??[],doc.characters??[]);if(evolution.length)throw new Error(evolution.join('; '));
   doc.metadata.updatedAt = new Date().toISOString();
