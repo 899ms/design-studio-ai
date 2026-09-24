@@ -12,7 +12,7 @@ import { loft, relax, remesh } from './scene-mesh-topology';
 import { applyBoneLimits, bind, limitedRotation, mirrorPose, mirrorWeights, normalizeWeights, quadruped, smoothWeights, solveIK } from './scene-rigging';
 import { packUV } from './scene-uv';
 import { applyPageCommand } from './scene-page-authoring';
-import { subdivide } from './scene-subdivide';
+import { subdivide, unsubdivide } from './scene-subdivide';
 import { removeNodeTree } from './node-removal';
 import { terrainMesh } from './scene-terrain';
 export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCommand){
@@ -50,6 +50,7 @@ export function applySceneCommand(doc:DesignDocument,pageId:string,input:SceneCo
   if(command.action==='insert-loop')insertLoop(mesh,(['x','y','z'].indexOf(command.axis)) as 0|1|2,command.offset);
   if(command.action==='split-edges')splitEdges(mesh,command.edges);
   if(command.action==='subdivide')subdivide(mesh,command.iterations,command.smooth);
+  if(command.action==='unsubdivide')unsubdivide(mesh,command.iterations);
   if(command.action==='relax'){if(mesh.skinIndices||mesh.morphTargets?.length)throw new Error('Finish topology before binding or adding morph targets');relax(mesh,command.iterations,command.strength);}
   if(command.action==='rig-quadruped'){if(mesh.skinIndices||scene.bones?.length)throw new Error('Unbind and remove the old rig before creating a replacement');scene.bones=quadruped(mesh,command.landmarks);}
   if(command.action==='rig-winged-quadruped'){if(mesh.skinIndices||scene.bones?.length||scene.rigId)throw new Error('Unbind and remove the old rig before creating a replacement');scene.bones=wingedQuadruped(mesh,command.landmarks);}

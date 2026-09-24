@@ -43,6 +43,7 @@ export const sceneCommandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('remesh'), nodeIds: z.array(id).min(1).max(64), outputId: id, resolution: z.number().int().min(12).max(48).default(28), symmetry: z.boolean().default(false), blend: finite.min(.001).max(2).default(.12) }),
   z.object({ action: z.literal('loft'), outputId: id, rings: z.array(z.object({ center: vectorSchema, radius: finite.min(.001).max(1000) })).min(2).max(64), segments: z.number().int().min(6).max(48).default(16), color: z.string().max(80).default('#D89B55') }),
   z.object({ action: z.literal('subdivide'), nodeId: id, iterations: z.number().int().min(1).max(3).default(1), smooth: z.boolean().default(true) }),
+  z.object({ action: z.literal('unsubdivide'), nodeId: id, iterations: z.number().int().min(1).max(3).default(1) }),
   z.object({ action: z.literal('relax'), nodeId: id, iterations: z.number().int().min(1).max(20).default(3), strength: finite.min(0).max(.5).default(.2) }),
   z.object({ action: z.literal('rig-quadruped'), nodeId: id, landmarks: quadrupedLandmarksSchema.optional() }),
   z.object({ action: z.literal('rig-winged-quadruped'), nodeId: id, landmarks: wingedLandmarksSchema }),

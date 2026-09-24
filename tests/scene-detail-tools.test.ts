@@ -58,6 +58,21 @@ test('linear subdivide keeps the surface and rejects meshes past the budget', ()
   assert.throws(() => command(setup(dense), { action: 'subdivide', nodeId: 'head', iterations: 3 }), /mesh budget/);
 });
 
+test('unsubdivide restores the coarse topology and attributes while keeping sculpted corners', () => {
+  const original = skinnedBox(), shaded = { ...skinnedBox(), normals: Array(original.positions.length).fill(0) };
+  let doc = command(setup(shaded), { action: 'subdivide', nodeId: 'head', iterations: 2 });
+  doc = command(doc, { action: 'sculpt', nodeId: 'head', mode: 'move', center: [.5, .5, .5], radius: .6, strength: 1, delta: [0, .2, 0] });
+  const sculpted = doc.pages[0].nodes[0].scene!.mesh!.positions.slice(0, original.positions.length);
+  const mesh = command(doc, { action: 'unsubdivide', nodeId: 'head', iterations: 2 }).pages[0].nodes[0].scene!.mesh!;
+  assert.deepEqual(mesh.indices, original.indices);
+  assert.deepEqual(mesh.uv, original.uv);
+  assert.deepEqual(mesh.skinIndices, original.skinIndices);
+  assert.equal(mesh.morphTargets![0].positions.length, original.positions.length);
+  assert.deepEqual(mesh.positions, sculpted);
+  assert.equal(mesh.normals!.length, original.positions.length);
+  assert.throws(() => command(setup(), { action: 'unsubdivide', nodeId: 'head' }), /not produced by subdivide/);
+});
+
 test('light command adds, patches, clears fields and removes page lights', () => {
   let doc = command(setup(), { action: 'light', id: 'belly', type: 'point', position: [0, 1, 1], intensity: 10, distance: 4 });
   assert.deepEqual(doc.pages[0].scene!.lights, [{ id: 'belly', type: 'point', position: [0, 1, 1], intensity: 10, distance: 4, color: '#ffffff' }]);
