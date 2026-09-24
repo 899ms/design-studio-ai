@@ -165,7 +165,9 @@ export function createSceneRenderer(renderer:T.WebGLRenderer,scene:T.Scene,camer
   let lastWidth=0,lastHeight=0;const light=new T.Vector3();
   return {draw:()=>{
     const size=renderer.getSize(new T.Vector2());
-    if(size.x!==lastWidth||size.y!==lastHeight){lastWidth=size.x;lastHeight=size.y;composer.setPixelRatio(renderer.getPixelRatio());composer.setSize(size.x,size.y);const pixels=renderer.getDrawingBufferSize(new T.Vector2());for(const target of [base,bloomSource,bloomTarget])target.setSize(pixels.x,pixels.y);bloom?.setSize(pixels.x,pixels.y);if(look)look.uniforms.resolution.value.copy(pixels);}
+    if(size.x!==lastWidth||size.y!==lastHeight){lastWidth=size.x;lastHeight=size.y;composer.setPixelRatio(renderer.getPixelRatio());composer.setSize(size.x,size.y);const pixels=renderer.getDrawingBufferSize(new T.Vector2());for(const target of [base,bloomSource,bloomTarget])target.setSize(pixels.x,pixels.y);
+      // Bloom kernels and grain cells are measured in pixels. A downscaled preview keeps them at full resolution so its glow and grain match the export relative to the frame.
+      const effect=pixels.clone().divideScalar(Math.min(1,renderer.getPixelRatio())).round();bloom?.setSize(effect.x,effect.y);if(look)look.uniforms.resolution.value.copy(effect);}
     const target=renderer.getRenderTarget();renderer.setRenderTarget(base);renderer.clear();renderer.render(scene,camera);
     if(bloom){
       // Excluded nodes occlude the glow as black silhouettes instead of emitting it. HDR sky and panorama backgrounds would otherwise bloom the whole frame white.

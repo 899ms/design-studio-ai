@@ -51,7 +51,7 @@ Emitters without the new styling fields keep their original spawn positions and 
 
 Sky and panorama backgrounds are excluded from bloom so an HDR sky cannot wash out the frame. Bright sun reflections still glow; raise `bloomThreshold` or set `material.bloom:false` on a node to remove its halo.
 
-Visual inspection and thumbnails render the scene at their output size rather than the page size ([`mountExportPage`](../src/app/export-page.ts) `renderScale`). They still run on a software GPU with a 45-second deadline. When a scene exceeds it, the API returns `504 render_timeout` ([`withPreviewRenderTimeout`](../server/exports.ts)) instead of `render_failed`. Transmission is the largest single cost because it renders the scene again. Depth of field, light shafts, many lights and dense emitters also add time. Full-size exports keep scale 1.
+Visual inspection and thumbnails render the scene at their output size rather than the page size ([`mountExportPage`](../src/app/export-page.ts) `renderScale`). Bloom and grain keep their full-resolution size, so the preview looks like the export. The previews still run on a software GPU, with a 45-second deadline for each request. When a scene exceeds it, the API returns `504 render_timeout` ([`withPreviewRenderTimeout`](../server/exports.ts)) instead of `render_failed`. Transmission is the largest single cost because it renders the scene again. Depth of field, light shafts, many lights and dense emitters also add time. Full-size exports keep scale 1.
 
 Scene commands include:
 

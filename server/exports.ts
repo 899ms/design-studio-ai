@@ -24,11 +24,12 @@ export interface ExportBrowser { newPage(): Promise<any>; close(): Promise<void>
 export const exportRoutes = new Hono<Env>();
 
 export const PREVIEW_RENDER_TIMEOUT_MS = 45000;
-/** Bound an inspection or thumbnail render. A timeout names the scene costs to cut, unlike a generic render failure. */
-export async function withPreviewRenderTimeout<T>(render: Promise<T>, milliseconds = PREVIEW_RENDER_TIMEOUT_MS): Promise<T> {
+export const INSPECTION_SIZE_ADVICE = 'Inspect fewer or smaller pages (limit or tileSize in overview mode, maxDimension in page mode), or make the scene cheaper';
+/** Bound an inspection or thumbnail render. A timeout names the costs the caller can cut, unlike a generic render failure. */
+export async function withPreviewRenderTimeout<T>(render: Promise<T>, sizeAdvice = 'Make the scene cheaper', milliseconds = PREVIEW_RENDER_TIMEOUT_MS): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([render, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new ApiError(504, 'render_timeout', `The render did not finish within ${Math.round(milliseconds / 1000)} seconds. Lower maxDimension, or make the scene cheaper: remove transmission from most materials, turn off depth of field and light shafts, and lower emitter counts.`)), milliseconds); })]);
+    return await Promise.race([render, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new ApiError(504, 'render_timeout', `The render did not finish within ${Math.round(milliseconds / 1000)} seconds. ${sizeAdvice}: remove transmission from most materials, turn off depth of field and light shafts, and lower emitter counts.`)), milliseconds); })]);
   } finally { if (timeout) clearTimeout(timeout); }
 }
 
@@ -195,7 +196,7 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
     await page.addScriptTag({ content: await bundle.text() });
     let output: Uint8Array;
     if (hooks.inspection) {
-      const encoded = await withPreviewRenderTimeout<string>(page.evaluate(({ doc, inspection }: any) => (globalThis as any).studioRenderer.inspectVisual(doc, inspection), { doc, inspection: hooks.inspection }));
+      const encoded = await withPreviewRenderTimeout<string>(page.evaluate(({ doc, inspection }: any) => (globalThis as any).studioRenderer.inspectVisual(doc, inspection), { doc, inspection: hooks.inspection }), INSPECTION_SIZE_ADVICE);
       if (encoded.length > 12 * 1024 * 1024) fail(413, 'inspection_too_large', 'Reduce inspection dimensions or page count.');
       output = Buffer.from(encoded, 'base64');
     } else if (thumbnail) {

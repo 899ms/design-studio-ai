@@ -4,22 +4,24 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { createDocument } from '../src/shared/catalog';
 import { ApiError } from '../server/security';
-import { withPreviewRenderTimeout } from '../server/exports';
+import { INSPECTION_SIZE_ADVICE, withPreviewRenderTimeout } from '../server/exports';
 
 test('a slow preview render becomes render_timeout while other failures keep their cause', async () => {
-  assert.equal(await withPreviewRenderTimeout(Promise.resolve('ok'), 50), 'ok');
-  await assert.rejects(withPreviewRenderTimeout(new Promise(() => {}), 20), (error: unknown) => {
+  assert.equal(await withPreviewRenderTimeout(Promise.resolve('ok'), undefined, 50), 'ok');
+  const timedOut = (pattern: RegExp) => (error: unknown) => {
     assert.ok(error instanceof ApiError);
     assert.equal(error.status, 504);
     assert.equal(error.code, 'render_timeout');
-    assert.match(error.message, /maxDimension/);
+    assert.match(error.message, pattern);
     assert.match(error.message, /transmission/);
     return true;
-  });
-  await assert.rejects(withPreviewRenderTimeout(Promise.reject(new Error('context lost')), 50), /context lost/);
+  };
+  await assert.rejects(withPreviewRenderTimeout(new Promise(() => {}), INSPECTION_SIZE_ADVICE, 20), timedOut(/tileSize.*maxDimension/));
+  await assert.rejects(withPreviewRenderTimeout(new Promise(() => {}), undefined, 20), timedOut(/^(?!.*maxDimension)/));
+  await assert.rejects(withPreviewRenderTimeout(Promise.reject(new Error('context lost')), undefined, 50), /context lost/);
 });
 
-test('inspection and thumbnails render 3D scenes at output size, not page size', { timeout: 90000 }, async () => {
+test('inspection and thumbnails render 3D scenes at output size with the full-size bloom', { timeout: 90000 }, async () => {
   const doc = createDocument('3d', 'Preview budget');
   doc.pages = [{ id: 'page', name: 'Scene', width: 1600, height: 900, background: '#050505', nodes: [
     { id: 'sphere', type: 'model3d', name: 'Sphere', x: 0, y: 0, width: 300, height: 300, data: { geometry: 'sphere' }, scene: { position: [0, 0, 0], material: { color: '#88ccff', emissive: '#ffffff', emissiveIntensity: 2, transmission: .6, clearcoat: 1 } } },
@@ -39,19 +41,21 @@ test('inspection and thumbnails render 3D scenes at output size, not page size',
         const pixels = context.getImageData(0, 0, image.width, image.height).data; let lit = 0;
         for (let i = 0; i < pixels.length; i += 4) if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 150) lit++;
         const buffers = g.webglCanvases.splice(0).map((canvas: HTMLCanvasElement) => [canvas.width, canvas.height]);
-        return { output: [image.width, image.height], buffers, lit };
+        return { output: [image.width, image.height], buffers, lit, glow: lit / (image.width * image.height) };
       };
       const inspection = await measure(await g.studioRenderer.inspectVisual(doc, { pageIndices: [0], time: 0, mode: 'page', tileSize: 400, columns: 1, maxDimension: 400 }));
       const thumbnail = await measure(await g.studioRenderer.thumbnail(doc));
-      return { inspection, thumbnail };
+      const full = await measure(await g.studioRenderer.inspectVisual(doc, { pageIndices: [0], time: 0, mode: 'page', tileSize: 400, columns: 1, maxDimension: 1600 }));
+      return { captures: { inspection, thumbnail }, full };
     }, doc);
-    for (const [name, capture] of Object.entries(result)) {
+    for (const [name, capture] of Object.entries(result.captures)) {
       assert.ok(capture.output[0] < 1600, `${name} output is downscaled`);
       assert.ok(capture.buffers.length > 0, `${name} used WebGL`);
       for (const [width, height] of capture.buffers) {
         assert.ok(Math.abs(width - capture.output[0]) <= 1 && Math.abs(height - capture.output[1]) <= 1, `${name} renders ${width}x${height} for a ${capture.output.join('x')} output`);
       }
       assert.ok(capture.lit > 100, `${name} still shows the lit subject`);
+      assert.ok(Math.abs(capture.glow - result.full.glow) < .05, `${name} bloom covers ${capture.glow.toFixed(2)} of the frame, the full-size render ${result.full.glow.toFixed(2)}`);
     }
   } finally { await browser.close(); }
 });
