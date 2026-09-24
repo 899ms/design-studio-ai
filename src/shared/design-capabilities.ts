@@ -111,6 +111,8 @@ export const sceneObjectSchema = z.object({
     clearcoatRoughness: number.min(0).max(1).optional(),
     /** false keeps this node out of the bloom glow while it still renders normally. */
     bloom: z.boolean().optional(),
+    /** false draws this node without page fog, for distant sky objects such as a moon. */
+    fog: z.boolean().optional(),
   }).optional(),
   bones: z.array(z.object({ name: z.string().max(120), parent: z.number().int().min(-1).max(255), position: vectorSchema, rotation: vectorSchema.optional(), bindRotation: vectorSchema.optional(), rotationLimits:z.object({min:vectorSchema,max:vectorSchema}).refine(l=>l.min.every((v,i)=>v<=l.max[i]),'Joint minimum must not exceed maximum').optional(), mirrorBone:z.string().min(1).max(120).optional() })).max(256).optional(),
 });

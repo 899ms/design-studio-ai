@@ -4,7 +4,7 @@ import { emitterPresets, presetSeed } from './scene-presets';
 import { defaultScene } from './scene-runtime';
 import type { DesignDocument } from './schema';
 
-type PageCommand = Extract<SceneCommand, { action: 'camera' | 'camera-key' | 'environment' | 'emitter' | 'remove-emitter' }>;
+type PageCommand = Extract<SceneCommand, { action: 'camera' | 'camera-key' | 'environment' | 'emitter' | 'remove-emitter' | 'light' }>;
 const defined = <V extends object>(value: V) => Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
 /** Merge a settings patch where null removes a key; unknown keys are rejected instead of silently dropped. */
 function mergeSettings(current: Record<string, unknown> | undefined, patch: Record<string, unknown>, allowed: string[], label: string) {
@@ -14,7 +14,7 @@ function mergeSettings(current: Record<string, unknown> | undefined, patch: Reco
   for (const [key, value] of Object.entries(patch)) if (value === null) delete next[key]; else next[key] = value;
   return Object.keys(next).length ? next : undefined;
 }
-/** Page-level camera, lighting, rendering and particle edits that merge into the existing scene. */
+/** Page-level camera, lighting, extra light, rendering and particle edits that merge into the existing scene. */
 export function applyPageCommand(doc: DesignDocument, pageId: string, command: PageCommand) {
   const page = doc.pages.find(p => p.id === pageId);
   if (!page) throw new Error('Unknown page');
@@ -58,6 +58,18 @@ export function applyPageCommand(doc: DesignDocument, pageId: string, command: P
     const emitters: any[] = scene.emitters ?? [], next = emitters.filter(e => e.id !== command.id);
     if (next.length === emitters.length) throw new Error('Unknown emitter');
     if (next.length) scene.emitters = next; else delete scene.emitters;
+  }
+  if (command.action === 'light') {
+    const lights: any[] = scene.lights ?? [], index = lights.findIndex(l => l.id === command.id);
+    if (command.remove) { if (index < 0) throw new Error('Unknown light'); lights.splice(index, 1); }
+    else {
+      if (index < 0 && lights.length >= 8) throw new Error('A page holds at most 8 extra lights');
+      const { action, remove, ...patch } = command, light: Record<string, unknown> = { ...lights[index] };
+      for (const [key, value] of Object.entries(patch)) if (value === null) delete light[key]; else if (value !== undefined) light[key] = value;
+      if (index < 0) { light.color ??= '#ffffff'; if (!light.type || !light.position || light.intensity === undefined) throw new Error('A new light needs type, position and intensity'); }
+      if (index < 0) lights.push(light); else lights[index] = light;
+    }
+    if (lights.length) scene.lights = lights; else delete scene.lights;
   }
   page.scene = sceneSchema.parse(scene);
 }
