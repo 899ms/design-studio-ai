@@ -306,7 +306,7 @@ export function falResultFile(result: unknown, kind: MediaInput['kind']): { url:
 }
 
 generationRoutes.get("/:id/media/:jobId", async c => {
-  await projectRow(c, c.req.param('id'));
+  await projectRow(c, c.req.param('id'), { document: false });
   const job = await c.env.DB.prepare('SELECT * FROM media_jobs WHERE id=? AND user_id=? AND project_id=?')
     .bind(c.req.param('jobId'), owner(c), c.req.param('id')).first<{provider:string;model:string;remote_id:string;kind:MediaInput['kind'];result_asset:string|null;observability_span_id:string|null}>();
   if (!job) fail(404, 'not_found', 'Media job not found.');

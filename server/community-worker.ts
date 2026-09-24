@@ -9,6 +9,7 @@ import type { CommunityJobRow } from './community-jobs';
 import type { CommunityFileRow } from './community-queries';
 import type { PublicationInput } from './community-publication';
 import { ApiError, fail, id, now } from './security';
+import { discardDocument, discardUnlessReferenced, encodeDocument } from './stored-documents';
 import { communityMilestones } from '../src/shared/community-taxonomy';
 import { communityEnabled } from './community-access';
 import { z } from 'zod';
@@ -74,13 +75,15 @@ async function processCopy(env:Bindings,job:CommunityJobRow,lease:string) {
  remapDocumentAssets(doc,mapping);doc.metadata={createdAt:now(),updatedAt:now()};doc=documentSchema.parse(doc);
  await updateStage(env,job,lease,'committing-project');
  const time=now(),sourceGuard=job.kind==='remix'?"AND EXISTS(SELECT 1 FROM community_listings l JOIN community_versions v ON v.listing_id=l.id WHERE l.id=j.listing_id AND l.epoch=j.epoch AND l.owner_available=1 AND l.suppressed=0 AND l.deleted=0 AND v.version=j.version AND v.status='ready')":'';
- const statements=[env.DB.prepare(`INSERT INTO projects(id,user_id,name,description,kind,document,revision,created_at,updated_at) SELECT ?,?,?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM community_jobs j WHERE j.id=? AND j.lease=? AND j.lease_until>? AND j.status='running' ${sourceGuard})`).bind(input.projectId,job.user_id,doc.name,'',doc.kind,JSON.stringify(doc),time,time,job.id,lease,Date.now()),
+ // An imported package can exceed D1's row cap, so its document is stored the way saves store one.
+ const stored=await encodeDocument(env,input.projectId,JSON.stringify(doc));
+ const statements=[env.DB.prepare(`INSERT INTO projects(id,user_id,name,description,kind,document,revision,created_at,updated_at) SELECT ?,?,?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM community_jobs j WHERE j.id=? AND j.lease=? AND j.lease_until>? AND j.status='running' ${sourceGuard})`).bind(input.projectId,job.user_id,doc.name,'',doc.kind,stored,time,time,job.id,lease,Date.now()),
  env.DB.prepare("UPDATE community_jobs SET status='succeeded',stage='completed',result=?,lease=NULL,lease_until=0,updated_at=? WHERE id=? AND lease=? AND changes()=1").bind(JSON.stringify({projectId:input.projectId}),time,job.id,lease)];
  for(const file of written)statements.push(env.DB.prepare(`INSERT INTO assets(id,user_id,project_id,name,mime_type,size,storage_key,created_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='succeeded')`).bind(file.id,job.user_id,input.projectId,file.filename,file.mime_type,file.size,file.storage_key,time,job.id));
  statements.push(env.DB.prepare(`INSERT INTO community_remix_origins(project_id,listing_id,version,attribution,verified,created_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='succeeded')`).bind(input.projectId,job.kind==='remix'?job.listing_id:null,job.kind==='remix'?job.version:null,JSON.stringify(attribution),job.kind==='remix'?1:0,time,job.id));
  if(job.kind==='remix')statements.push(env.DB.prepare("INSERT INTO community_contributions(listing_id,actor_id,action,first_at,last_at) SELECT ?,?,'remix',?,? WHERE EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='succeeded') AND EXISTS(SELECT 1 FROM community_listings WHERE id=? AND user_id!=?) ON CONFLICT(listing_id,actor_id,action) DO NOTHING").bind(job.listing_id,job.user_id,time,time,job.id,job.listing_id,job.user_id));
  statements.push(env.DB.prepare("UPDATE community_files SET status='deleted' WHERE job_id=? AND role='asset' AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='succeeded')").bind(job.id,job.id),env.DB.prepare("DELETE FROM community_storage_reservations WHERE job_id=? AND EXISTS(SELECT 1 FROM community_jobs WHERE id=? AND status='succeeded')").bind(job.id,job.id));
- const results=await env.DB.batch(statements);if(!(results[0] as {meta:{changes:number}}).meta.changes)fail(409,'source_revoked','The original design was revoked before this remix committed.');
+ let results:unknown[];try{results=await env.DB.batch(statements);}catch(error){await discardUnlessReferenced(env,input.projectId,stored);throw error;}if(!(results[0] as {meta:{changes:number}}).meta.changes){await discardDocument(env,stored);fail(409,'source_revoked','The original design was revoked before this remix committed.');}
  if(job.kind==='remix')for(const milestone of communityMilestones)await env.DB.prepare(`INSERT INTO community_badges(user_id,badge,awarded_at) SELECT l.user_id,?,? FROM community_listings l WHERE l.id=? AND (SELECT COUNT(DISTINCT c.actor_id) FROM community_contributions c JOIN community_listings own ON own.id=c.listing_id WHERE own.user_id=l.user_id AND c.action='remix')>=? ON CONFLICT(user_id,badge) DO NOTHING`).bind(`remixed-by-${milestone}`,time,job.listing_id,milestone).run();
 }
 export async function processCommunityJob(env:Bindings,jobId:string) {

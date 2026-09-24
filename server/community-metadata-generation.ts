@@ -7,6 +7,7 @@ import { isTextProvider, textProviderSchema } from '../src/shared/providers';
 import { completeText } from './providers';
 import { communityRateLimit } from './community-access';
 import { fail, owner } from './security';
+import { decodeDocument } from './stored-documents';
 
 /** Summarize an already projected design without serializing source or media URLs. */
 function designContext(document: DesignDocument) {
@@ -39,8 +40,10 @@ export async function generateCommunityMetadata(c: Context<Env>, input: unknown)
     return row;
   };
   const row = await readRevision();
+  // A missing object means a save replaced it after the revision check.
+  const source = await decodeDocument(c.env, row.document) ?? fail(409,'revision_conflict','The saved project changed. Load the current saved revision, review your draft fields, then generate again.');
   let context: ReturnType<typeof designContext>;
-  try { context = designContext(communityProjection(documentSchema.parse(JSON.parse(row.document))).document); }
+  try { context = designContext(communityProjection(documentSchema.parse(JSON.parse(source))).document); }
   catch { fail(400,'unsafe_projection','The saved design cannot be safely reviewed for Community. Repair its visible dependencies and save it before generating.'); }
   let provider = body.provider;
   if (!provider) {

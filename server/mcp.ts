@@ -366,7 +366,7 @@ export async function handleMcp(c: Context<Env>, app: Hono<Env>) {
       annotations: { readOnlyHint: true },
     },
     async ({ projectId }) => {
-      await projectRow(c, projectId);
+      await projectRow(c, projectId, { document: false });
       const rows = await c.env.DB.prepare(
         "SELECT id,name,mime_type as mimeType,size FROM assets WHERE project_id=? AND user_id=?",
       )

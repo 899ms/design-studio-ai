@@ -17,6 +17,7 @@ import {characterEvolutionErrors} from '../src/shared/character-validation';
 import { inspectMotion, motionInspectionSchema } from '../src/shared/motion-inspection';
 import { documentChanges, projectSummary, responseModeSchema, summarizeScene } from '../src/shared/document-change-summary';
 import { updateEvent } from './observability-store';
+import { assertEmbeddable, decodeDocument, discardDocument, discardUnlessReferenced, encodeDocument, loadDocument, storedDocumentKey } from './stored-documents';
 import { Hono } from "hono";
 import { z } from "zod";
 import { documentSchema, type DesignDocument } from "../src/shared/schema";
@@ -39,17 +40,30 @@ export interface ProjectRow {
   published_slug: string | null;
   thumbnail_revision?: number | null;
   thumbnail_deleting?: number;
+  /** The raw column value when the document lives in R2; `document` then holds the loaded JSON. */
+  stored_document?: string;
 }
-export async function projectRow(c: Context<Env>, projectId: string) {
-  const row = await c.env.DB.prepare(
-    "SELECT projects.*, (SELECT MAX(revision) FROM project_thumbnails WHERE project_id=projects.id AND state='ready') AS thumbnail_revision FROM projects WHERE id=? AND user_id=?",
-  )
-    .bind(projectId, owner(c))
-    .first<ProjectRow>();
+const selectProject = (c: Context<Env>, projectId: string) => c.env.DB.prepare(
+  "SELECT projects.*, (SELECT MAX(revision) FROM project_thumbnails WHERE project_id=projects.id AND state='ready') AS thumbnail_revision FROM projects WHERE id=? AND user_id=?",
+).bind(projectId, owner(c)).first<ProjectRow>();
+/**
+ * Reads an owned project. `document: false` skips loading a stored document for ownership and revision checks;
+ * `row.document` then still holds the raw column value, so call `withDocument` before reading it.
+ */
+export async function projectRow(c: Context<Env>, projectId: string, options: { document?: boolean } = {}) {
+  const row = await selectProject(c, projectId);
   if (!row) fail(404, "not_found", "Project not found.");
   const span = c.get('telemetrySpan');
   if (span && span.event.projectId !== row!.id) { span.event.projectId = row!.id; await updateEvent(c.env, span.event); }
-  return row!;
+  return options.document === false ? row! : withDocument(c, row!);
+}
+/** Loads the document of a row read with `document: false`; a row that already holds its document is returned as is. */
+export async function withDocument(c: Context<Env>, row: ProjectRow, retried = false): Promise<ProjectRow> {
+  if (row.stored_document || !storedDocumentKey(row.document)) return row;
+  const document = retried ? await loadDocument(c.env, row.document) : await decodeDocument(c.env, row.document);
+  // The row was read before a concurrent save replaced its object; the fresh row names the current one.
+  if (document === undefined) return withDocument(c, await selectProject(c, row.id) ?? fail(404, "not_found", "Project not found."), true);
+  return { ...row, stored_document: row.document, document };
 }
 export const serializeProject = (row: ProjectRow, base: string) => ({
   id: row.id,
@@ -91,10 +105,13 @@ export async function saveDocument(
   operationId?: string,
   receiptIdentity?: { key: string; hash: string },
   receiptDetails?: Record<string, unknown>,
+  /** The row the caller already read with its document, spared a second load; the revision guard still applies. */
+  current?: ProjectRow,
 ) {
-  const row = await projectRow(c, projectId);
+  const row = current?.id === projectId ? await withDocument(c, current) : await projectRow(c, projectId);
+  const storedJson = JSON.parse(row.document);
   // Diagnose a stale v1 client before validating fields that only exist in v2.
-  if (document && typeof document === 'object' && 'schemaVersion' in document && document.schemaVersion === 1 && JSON.parse(row.document).schemaVersion === 2) {
+  if (document && typeof document === 'object' && 'schemaVersion' in document && document.schemaVersion === 1 && storedJson.schemaVersion === 2) {
     if (expectedRevision !== row.revision) fail(409, 'revision_conflict', 'Project changed. Reload before saving.');
     fail(409, 'document_upgrade_required', 'This project uses document v2. Upgrade your client and reload before saving.');
   }
@@ -102,7 +119,7 @@ export async function saveDocument(
   const identity = receiptIdentity ?? await creativeSaveIdentity(parsed, expectedRevision, operationId, expectedBriefRevision);
   if (identity) { const receipt = await readCreativeReceipt(c, row.id, identity); if (receipt) return receipt; }
   if (expectedRevision !== row.revision) fail(409, "revision_conflict", "Project changed. Reload before saving.");
-  const stored = documentSchema.parse(JSON.parse(row.document));
+  const stored = documentSchema.parse(storedJson);
   if (stored.schemaVersion === 2 && parsed.schemaVersion !== 2) fail(409, "document_upgrade_required", "This project uses document v2. Upgrade your client and reload before saving.");
   if (parsed.id !== row.id || parsed.kind !== row.kind)
     fail(
@@ -110,17 +127,18 @@ export async function saveDocument(
       "invalid_document",
       "Document ID and kind must match the project.",
     );
-  const evolution=characterEvolutionErrors(JSON.parse(row.document).characters??[],parsed.characters??[]);if(evolution.length)fail(400,'invalid_topology',evolution.join('; '));
+  const evolution=characterEvolutionErrors(storedJson.characters??[],parsed.characters??[]);if(evolution.length)fail(400,'invalid_topology',evolution.join('; '));
   await validateAssets(c, parsed, row.id);
   await preparePaintingAssets(c, row.id, parsed, stored);
   parsed.metadata.updatedAt = now();
   // Server-generated or restored asset references must obey the same canonical limits.
   parsed = documentSchema.parse(parsed);
+  const json = JSON.stringify(parsed), value = await encodeDocument(c.env, row.id, json), storedKey = storedDocumentKey(value);
   const statement = c.env.DB.prepare(
     "UPDATE projects SET document=?,name=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=? AND revision=? AND (? IS NULL OR COALESCE((SELECT revision FROM design_briefs WHERE project_id=projects.id AND user_id=projects.user_id),0)=?)",
   )
     .bind(
-      JSON.stringify(parsed),
+      value,
       parsed.name,
       parsed.metadata.updatedAt,
       row.id,
@@ -128,12 +146,23 @@ export async function saveDocument(
       row.revision,
       expectedBriefRevision ?? null, expectedBriefRevision ?? null,
     );
-  const committed = serializeProject({ ...row, document: JSON.stringify(parsed), name: parsed.name, revision: row.revision + 1, updated_at: parsed.metadata.updatedAt }, origin(c));
-  const results = await c.env.DB.batch([statement, ...(identity ? [
-    c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(receiptDetails ? { ...committed, receiptDetails } : committed), Date.now()),
-    c.env.DB.prepare("DELETE FROM creative_save_receipts WHERE project_id=? AND user_id=? AND operation_id NOT LIKE 'job-%' AND operation_id NOT IN (SELECT operation_id FROM creative_save_receipts WHERE project_id=? AND user_id=? ORDER BY revision DESC LIMIT 8)").bind(row.id, owner(c), row.id, owner(c)),
-  ] : [])]);
+  const committed = { ...serializeProject({ ...row, document: 'null', name: parsed.name, revision: row.revision + 1, updated_at: parsed.metadata.updatedAt }, origin(c)), document: parsed };
+  // A stored document is referenced from the receipt too, so the receipt row stays within D1's limit.
+  const receipt = { ...committed, ...(storedKey ? { document: undefined, storedDocument: storedKey } : {}), ...(receiptDetails ? { receiptDetails } : {}) };
+  let results: unknown[];
+  try {
+    results = await c.env.DB.batch([statement, ...(identity ? [
+      c.env.DB.prepare("INSERT INTO creative_save_receipts(operation_id,project_id,user_id,payload_hash,revision,response,created_at) SELECT ?,?,?,?,?,?,? WHERE changes()=1").bind(identity.key, row.id, owner(c), identity.hash, committed.revision, JSON.stringify(receipt), Date.now()),
+      c.env.DB.prepare("DELETE FROM creative_save_receipts WHERE project_id=? AND user_id=? AND operation_id NOT LIKE 'job-%' AND operation_id NOT IN (SELECT operation_id FROM creative_save_receipts WHERE project_id=? AND user_id=? ORDER BY revision DESC LIMIT 8)").bind(row.id, owner(c), row.id, owner(c)),
+    ] : [])]);
+  } catch (error) {
+    // A save that committed despite the error no longer references the replaced object.
+    if (await discardUnlessReferenced(c.env, row.id, value)) await discardDocument(c.env, row.stored_document);
+    throw error;
+  }
   const result = results[0] as { meta?: { changes?: number } };
+  // Only the winning save owns its stored object; the replaced revision's object is no longer referenced by the row.
+  await discardDocument(c.env, result.meta?.changes ? row.stored_document : value);
   if (!result.meta?.changes && identity){const receipt=await readCreativeReceipt(c,row.id,identity);if(receipt)return receipt;}
   if (!result.meta?.changes)
     fail(409, "revision_conflict", "Project changed. Reload before saving.");
@@ -146,7 +175,7 @@ export async function storeAsset(
   mimeType: string,
   data: ArrayBuffer,
 ) {
-  await projectRow(c, projectId);
+  await projectRow(c, projectId, { document: false });
   if (data.byteLength > 20 * 1024 * 1024)
     fail(413, "asset_too_large", "Assets must be at most 20 MB.");
   // Some browsers supply an empty or generic MIME type for local GLB files.
@@ -237,7 +266,7 @@ export async function storeAsset(
 }
 export const projectRoutes = new Hono<Env>();
 projectRoutes.get("/:id/assets", async (c) => {
-  await projectRow(c, c.req.param("id"));
+  await projectRow(c, c.req.param("id"), { document: false });
   const rows = await c.env.DB.prepare(
     "SELECT id,name,mime_type as mimeType,size FROM assets WHERE project_id=? AND user_id=? ORDER BY created_at DESC",
   )
@@ -295,6 +324,7 @@ projectRoutes.post("/", async (c) => {
   const parsed = documentSchema.parse(doc);
   const sourceRefs = await validateAssets(c, parsed);
   const time = now();
+  let stored = await encodeDocument(c.env, projectId, JSON.stringify(parsed));
   await c.env.DB.prepare(
     "INSERT INTO projects(id,user_id,name,description,kind,document,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)",
   )
@@ -304,11 +334,12 @@ projectRoutes.post("/", async (c) => {
       body.name,
       body.description,
       body.kind,
-      JSON.stringify(parsed),
+      stored,
       time,
       time,
     )
-    .run();
+    .run()
+    .catch(async error => { await discardUnlessReferenced(c.env, projectId, stored); throw error; });
   try {
     const mapping = new Map<string, Awaited<ReturnType<typeof storeAsset>>>();
     for (const sourceId of sourceRefs) {
@@ -321,12 +352,17 @@ projectRoutes.post("/", async (c) => {
     if (mapping.size) remapDocumentAssets(parsed, mapping);
     await preparePaintingAssets(c, projectId, parsed);
     if (mapping.size || parsed.schemaVersion === 2) {
-      await c.env.DB.prepare('UPDATE projects SET document=? WHERE id=? AND user_id=?').bind(JSON.stringify(documentSchema.parse(parsed)), projectId, owner(c)).run();
+      const remapped = await encodeDocument(c.env, projectId, JSON.stringify(documentSchema.parse(parsed)));
+      await c.env.DB.prepare('UPDATE projects SET document=? WHERE id=? AND user_id=?').bind(remapped, projectId, owner(c)).run()
+        .catch(async error => { await discardUnlessReferenced(c.env, projectId, remapped); throw error; });
+      await discardDocument(c.env, stored);
+      stored = remapped;
     }
   } catch (error) {
     const copied = await c.env.DB.prepare('SELECT storage_key FROM assets WHERE project_id=? AND user_id=?').bind(projectId, owner(c)).all<{storage_key:string}>();
     await c.env.DB.prepare('DELETE FROM projects WHERE id=? AND user_id=?').bind(projectId, owner(c)).run();
     for (const asset of copied.results) await c.env.ASSETS_BUCKET.delete(asset.storage_key);
+    await discardDocument(c.env, stored);
     throw error;
   }
   return c.json(
@@ -353,19 +389,22 @@ projectRoutes.patch("/:id", async (c) => {
   const doc = JSON.parse(row.document);
   doc.name = body.name ?? row.name;
   doc.metadata.updatedAt = now();
+  const value = await encodeDocument(c.env, row.id, JSON.stringify(doc));
   const result = await c.env.DB.prepare(
     "UPDATE projects SET name=?,description=?,document=?,revision=revision+1,updated_at=? WHERE id=? AND user_id=? AND revision=?",
   )
     .bind(
       doc.name,
       body.description ?? row.description,
-      JSON.stringify(doc),
+      value,
       now(),
       row.id,
       owner(c),
       row.revision,
     )
-    .run();
+    .run()
+    .catch(async error => { if (await discardUnlessReferenced(c.env, row.id, value)) await discardDocument(c.env, row.stored_document); throw error; });
+  await discardDocument(c.env, result.meta.changes ? row.stored_document : value);
   if (!result.meta.changes)
     fail(409, "revision_conflict", "Project changed. Try again.");
   return c.json({
@@ -375,7 +414,7 @@ projectRoutes.patch("/:id", async (c) => {
 projectRoutes.put("/:id/document", async (c) => {
   // The owned save service validates the canonical document after its version guard.
   const body = documentWriteSchema.extend({ document: z.unknown() }).parse(await c.req.json());
-  const before = body.responseMode === 'summary' ? documentSchema.parse(JSON.parse((await projectRow(c, c.req.param('id'))).document)) : undefined;
+  const current = body.responseMode === 'summary' ? await projectRow(c, c.req.param('id')) : undefined, before = current && documentSchema.parse(JSON.parse(current.document));
   const project = await saveDocument(
       c,
       c.req.param("id"),
@@ -383,12 +422,15 @@ projectRoutes.put("/:id/document", async (c) => {
       body.expectedRevision,
       body.expectedBriefRevision,
       body.operationId,
+      undefined,
+      undefined,
+      current,
     );
-  if (!before) return c.json({ project });
+  if (!before || 'documentSuperseded' in project) return c.json({ project });
   return c.json({ project: projectSummary(project), ...documentChanges(before, project.document) });
 });
 projectRoutes.delete("/:id", async (c) => {
-  const row = await projectRow(c, c.req.param("id"));
+  const row = await projectRow(c, c.req.param("id"), { document: false });
   await guardCommunityProjectDeletion(c.env, row.id, owner(c));
   // Close thumbnail publication before reading storage keys, so deletion cannot miss a late cover.
   await c.env.DB.prepare("UPDATE projects SET thumbnail_deleting=1 WHERE id=? AND user_id=?").bind(row.id, owner(c)).run();
@@ -397,15 +439,17 @@ projectRoutes.delete("/:id", async (c) => {
   )
     .bind(row.id, owner(c), row.id, row.id, row.id)
     .all<{ storage_key: string }>();
-  await c.env.DB.prepare("DELETE FROM projects WHERE id=? AND user_id=?")
+  // The deleted row names the document object current at deletion, even if a save landed after the read above.
+  const deleted = await c.env.DB.prepare("DELETE FROM projects WHERE id=? AND user_id=? RETURNING document")
     .bind(row.id, owner(c))
-    .run();
+    .first<{ document: string }>();
+  await discardDocument(c.env, deleted?.document);
   for (const asset of assets.results)
     await c.env.ASSETS_BUCKET.delete(asset.storage_key);
   return c.json({ ok: true });
 });
 projectRoutes.post("/:id/assets", async (c) => {
-  await projectRow(c, c.req.param("id"));
+  await projectRow(c, c.req.param("id"), { document: false });
   const form = await c.req.formData();
   const file = form.get("file");
   if (!(file instanceof File))
@@ -437,10 +481,12 @@ async function createPublication(c: Context<Env>) {
   doc.assets = doc.assets.map((a) => ({ ...a, url: replace(a.url) }));
   for (const page of doc.pages)
     for (const node of page.nodes) if (node.src) node.src = replace(node.src);
+  const published = JSON.stringify(doc);
+  assertEmbeddable(published, 'publish');
   const statements = [
     c.env.DB.prepare(
       "INSERT INTO publications(slug,project_id,user_id,document,revision,created_at) VALUES(?,?,?,?,?,?)",
-    ).bind(slug, row.id, owner(c), JSON.stringify(doc), row.revision, now()),
+    ).bind(slug, row.id, owner(c), published, row.revision, now()),
     ...Array.from(refs, (asset) =>
       c.env.DB.prepare(
         "INSERT INTO publication_assets(slug,asset_id) VALUES(?,?)",
@@ -540,14 +586,14 @@ projectRoutes.get('/:id/scene', async c => {
 export async function applySceneRequest(c:Context<Env>,projectId:string,input:z.infer<typeof sceneRequestSchema>,receiptIdentity?:{key:string;hash:string}){
   const sceneResponse=(revision:number,changes:ReturnType<typeof documentChanges>|undefined,next:DesignDocument)=>{const report=inspectScene(next,input.pageId);return input.responseMode==='summary'?{revision,preview:input.preview,...changes,...summarizeScene(report,next)}:{revision,preview:input.preview,...report};};
   // A replayed job has no base document, so the change summary recorded at commit is reused.
-  if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt)return sceneResponse(receipt.revision,receipt.receiptDetails as ReturnType<typeof documentChanges>|undefined,documentSchema.parse(receipt.document));}
+  if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt?.documentSuperseded)return{revision:receipt.revision,preview:input.preview,...receipt.receiptDetails,documentSuperseded:true};if(receipt)return sceneResponse(receipt.revision,receipt.receiptDetails as ReturnType<typeof documentChanges>|undefined,documentSchema.parse(receipt.document));}
   const row=await projectRow(c,projectId);
   if(row.revision!==input.expectedRevision)fail(409,'conflict','Project revision changed. Read and reconcile before applying geometry.');
   const before=documentSchema.parse(JSON.parse(row.document));let next:DesignDocument;
   // A batch runs in one mutation, so the document is cloned, validated and saved once; any failing command rejects it all.
   try{next=mutateDocument(before,[input.command].flat().map(command=>({op:'scene-command',pageId:input.pageId,command})));}catch(error){if(error instanceof z.ZodError)throw error;fail(400,'invalid_scene_command',error instanceof Error?error.message:'Scene command failed');throw error;}
   // Only summary responses use the change list; skipping it spares serializing large meshes twice.
-  const changes=input.responseMode==='summary'?documentChanges(before,next):undefined,revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity,receiptIdentity&&changes)).revision;
+  const changes=input.responseMode==='summary'?documentChanges(before,next):undefined,revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity,receiptIdentity&&changes,row)).revision;
   return sceneResponse(revision,changes,next);
 }
 projectRoutes.post('/:id/scene', async c => c.json(await applySceneRequest(c,c.req.param('id'),sceneRequestSchema.parse(await c.req.json()))));

@@ -37,7 +37,8 @@ function validShading(mesh: MeshData) {
     const normal = new T.Vector3().fromArray(mesh.normals!, i * 3);
     const tangent = new T.Vector3().fromArray(mesh.tangents!, i * 4);
     assert(Number.isFinite(normal.length()) && Number.isFinite(tangent.length()));
-    assert(Math.abs(normal.dot(tangent)) < 1e-5, 'Tangent must remain orthogonal to the updated normal');
+    // Stored shading vectors keep four decimals, so orthogonality holds to that rounding.
+    assert(Math.abs(normal.dot(tangent)) < 5e-4, 'Tangent must remain orthogonal to the updated normal');
     if (mesh.indices.includes(i)) assert.equal(Math.abs(mesh.tangents![i * 4 + 3]), 1);
   }
 }

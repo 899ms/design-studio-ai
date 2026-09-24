@@ -16,6 +16,8 @@ Canvas editing shortcuts respect focused controls, text input, IME composition, 
 
 Cloudflare runs that handler with D1, R2, static assets, and Browser Rendering. The [Node adapter](../server/node.ts) supplies SQLite, filesystem assets, static serving, and Chromium for the same routes. Headless export runs the application's bundled renderer against validated data; it is not a general remote browser or user-code execution service.
 
+A project document normally lives in its database row. Because a D1 row is capped at 2 MB, a document above the [inline limit](../server/stored-documents.ts) (dense sculpted meshes) is gzip-compressed into the asset bucket under `documents/<projectId>/` and the row keeps a pointer; saves replace the object with the row and project deletion removes it. Save receipts reference the same object; replaying one whose object a later save replaced still reports the committed revision, marked `documentSuperseded` and without the document. Ownership and revision checks, including change polling, skip loading the object. Publishing and Community snapshots still embed the document in a row, so they refuse one over 2 MB with `413 document_too_large`.
+
 ## Document and edit contracts
 
 | Contract | Machine-owned authority |

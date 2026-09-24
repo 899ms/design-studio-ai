@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { mergeRequestSchema } from '../src/shared/collaboration-contract';
 import { documentSchema } from '../src/shared/schema';
 import { mergeDocuments, MergeConflict } from '../src/shared/document-merge';
-import { projectRow, saveDocument, serializeProject } from './projects';
+import { projectRow, saveDocument, serializeProject, withDocument } from './projects';
 import { origin, fail } from './security';
 import type { Env } from './types';
 export const collaborationRoutes = new Hono<Env>();
@@ -15,14 +15,17 @@ collaborationRoutes.post('/:id/merge', async c => {
   if (current.schemaVersion === 2 && body.document.schemaVersion !== 2) fail(409, 'document_upgrade_required', 'This project uses document v2. Upgrade your client and reload before merging.');
   try {
     const next = mergeDocuments(body.base, body.document, current);
-    return c.json({ project: await saveDocument(c, row.id, next, row.revision) });
+    return c.json({ project: await saveDocument(c, row.id, next, row.revision, undefined, undefined, undefined, undefined, row) });
   } catch (error) {
     if (error instanceof MergeConflict) return c.json({ error: { code: 'merge_conflict', message: error.message, details: { paths: error.paths } } }, 409);
     throw error;
   }
 });
 collaborationRoutes.get('/:id/changes', async c => {
-  const row = await projectRow(c, c.req.param('id'));
+  // Polling asks often and usually finds no change, so the document is loaded only when the revision moved.
+  const row = await projectRow(c, c.req.param('id'), { document: false });
   const since = Number(c.req.query('since') ?? 0);
-  return c.json(row.revision === since ? { revision: row.revision, unchanged: true } : { revision: row.revision, project: serializeProject(row, origin(c)) });
+  if (row.revision === since) return c.json({ revision: row.revision, unchanged: true });
+  const loaded = await withDocument(c, row);
+  return c.json({ revision: loaded.revision, project: serializeProject(loaded, origin(c)) });
 });

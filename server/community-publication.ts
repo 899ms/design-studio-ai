@@ -11,11 +11,14 @@ import { communityJobReceipt, dispatchCommunityJob, serializeCommunityJob, type 
 import { ownedCommunityListing, type CommunityListingRow } from './community-access';
 import { reserveCommunityStorage } from './community-assets';
 import { fail, id, hash, now } from './security';
+import { assertEmbeddable, decodeDocument } from './stored-documents';
 export interface PublicationInput {document:DesignDocument;metadata:ReturnType<typeof communityPreflightSchema.parse>;disclosure:unknown;assetSources:{id:string;storageKey:string;mimeType:string;size:number}[];attribution:CommunityAttribution|null;creator:{handle:string;displayName:string}}
 async function inspectPublication(env:Bindings,userId:string,input:unknown) {
  const value=communityPreflightSchema.parse(input),row=await env.DB.prepare('SELECT id,document,revision FROM projects WHERE id=? AND user_id=?').bind(value.projectId,userId).first<{id:string;document:string;revision:number}>();
  if(!row)fail(404,'not_found','Project not found.');if(row!.revision!==value.expectedProjectRevision)fail(409,'revision_conflict','Save or reload this project before publishing.');
- let projected:ReturnType<typeof communityProjection>;try{projected=communityProjection(documentSchema.parse(JSON.parse(row!.document)));}catch(error){fail(400,'unsafe_public_projection',error instanceof Error?error.message:'The public projection could not be validated.');}const document=projected!.document;
+ const source=await decodeDocument(env,row!.document)??fail(409,'revision_conflict','Save or reload this project before publishing.');let projected:ReturnType<typeof communityProjection>;try{projected=communityProjection(documentSchema.parse(JSON.parse(source)));}catch(error){fail(400,'unsafe_public_projection',error instanceof Error?error.message:'The public projection could not be validated.');}const document=projected!.document;
+ // Community jobs and versions embed the document in a D1 row.
+ assertEmbeddable(JSON.stringify(document),'publish to Community');
  if(!document.pages[value.cover.pageIndex])fail(400,'invalid_page','Select an existing cover page.');
  for(const options of value.formats){if(!document.pages[options.pageIndex])fail(400,'invalid_page','A selected export page does not exist.');if(options.format==='react'&&!['web','wireframe'].includes(document.kind))fail(400,'unsupported_export','React export requires a Website or Wireframe project.');}
  for(const options of value.formats)if(options.format==='png-sequence'||options.format==='spritesheet'){
