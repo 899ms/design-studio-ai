@@ -23,6 +23,15 @@ import { interactiveSnapshotHtml } from './published-html';
 export interface ExportBrowser { newPage(): Promise<any>; close(): Promise<void> }
 export const exportRoutes = new Hono<Env>();
 
+export const PREVIEW_RENDER_TIMEOUT_MS = 45000;
+/** Bound an inspection or thumbnail render. A timeout names the scene costs to cut, unlike a generic render failure. */
+export async function withPreviewRenderTimeout<T>(render: Promise<T>, milliseconds = PREVIEW_RENDER_TIMEOUT_MS): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([render, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new ApiError(504, 'render_timeout', `The render did not finish within ${Math.round(milliseconds / 1000)} seconds. Lower maxDimension, or make the scene cheaper: remove transmission from most materials, turn off depth of field and light shafts, and lower emitter counts.`)), milliseconds); })]);
+  } finally { if (timeout) clearTimeout(timeout); }
+}
+
 const mimeTypes = {'editable-scene':'application/json','scene-angles':'application/zip', motion:'application/zip', 'png-sequence':'application/zip', spritesheet:'application/zip', json: 'application/json', svg: 'image/svg+xml', html: 'text/html', png: 'image/png', pdf: 'application/pdf', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', webm: 'video/webm', mp4: 'video/mp4', react: 'application/zip', glb: 'model/gltf-binary', gltf: 'model/gltf+json' };
 
 /** Fetch only generated Google Fonts CSS and its fixed-origin font files, before browser isolation. */
@@ -186,24 +195,11 @@ export async function renderSnapshotExport(bindings: Bindings, name: string, doc
     await page.addScriptTag({ content: await bundle.text() });
     let output: Uint8Array;
     if (hooks.inspection) {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const encoded = await Promise.race([
-          page.evaluate(({ doc, inspection }: any) => (globalThis as any).studioRenderer.inspectVisual(doc, inspection), { doc, inspection: hooks.inspection }),
-          new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('Visual inspection timed out')), 45000); }),
-        ]);
-        if (encoded.length > 12 * 1024 * 1024) fail(413, 'inspection_too_large', 'Reduce inspection dimensions or page count.');
-        output = Buffer.from(encoded, 'base64');
-      } finally { if (timeout) clearTimeout(timeout); }
+      const encoded = await withPreviewRenderTimeout<string>(page.evaluate(({ doc, inspection }: any) => (globalThis as any).studioRenderer.inspectVisual(doc, inspection), { doc, inspection: hooks.inspection }));
+      if (encoded.length > 12 * 1024 * 1024) fail(413, 'inspection_too_large', 'Reduce inspection dimensions or page count.');
+      output = Buffer.from(encoded, 'base64');
     } else if (thumbnail) {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const encoded = await Promise.race([
-          page.evaluate(({doc,selection}:any) => (globalThis as any).studioRenderer.thumbnail(doc,selection), {doc,selection:hooks.thumbnailSelection}),
-          new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('Thumbnail render timed out')), 45000); }),
-        ]);
-        output = Buffer.from(encoded, 'base64');
-      } finally { if (timeout) clearTimeout(timeout); }
+      output = Buffer.from(await withPreviewRenderTimeout<string>(page.evaluate(({doc,selection}:any) => (globalThis as any).studioRenderer.thumbnail(doc,selection), {doc,selection:hooks.thumbnailSelection})), 'base64');
     } else if(options.format==='editable-scene'){
       const encoded=await page.evaluate(({doc,original,index,nodeId}:any)=>(globalThis as any).studioRenderer.editableScene(doc,original,index,nodeId),{doc,original:document,index:options.pageIndex,nodeId:options.nodeId});output=Buffer.from(encoded,'base64');
     } else if(options.format==='scene-angles'){

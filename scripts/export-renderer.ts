@@ -17,9 +17,9 @@ import { exportScene } from '../src/shared/scene-runtime';
 async function thumbnail(doc: DesignDocument, selection?: {pageIndex:number;time:number;focalX:number;focalY:number}) {
   document.body.style.cssText = 'margin:0;background:transparent';
   const index=selection?.pageIndex??0;
-  const mounted = await mountExportPage(doc, index, selection?.time??(doc.timeline?.duration ?? 0) / 2);
+  const page = doc.pages[index], scale = Math.min((selection?960:480) / page.width, (selection?960:480) / page.height);
+  const mounted = await mountExportPage(doc, index, selection?.time??(doc.timeline?.duration ?? 0) / 2, false, scale);
   try {
-    const page = doc.pages[index], scale = Math.min((selection?960:480) / page.width, (selection?960:480) / page.height);
     const canvas = await rasterizeExportPage(mounted.host, Math.max(1, Math.round(page.width * scale)), Math.max(1, Math.round(page.height * scale)));
     if(selection){
       const cover=document.createElement('canvas');cover.width=480;cover.height=360;
