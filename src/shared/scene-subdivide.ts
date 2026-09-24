@@ -1,6 +1,7 @@
 import type { MeshData } from './design-capabilities';
 import { refreshMeshShading } from './mesh-shading';
 
+const MAX_SUBDIVIDED_VERTICES = 100000;
 /** Five decimals keep sub-millimetre detail without bloating stored documents with float noise. */
 const round = (value: number) => Math.round(value * 1e5) / 1e5;
 
@@ -33,7 +34,8 @@ function subdivideOnce(mesh: MeshData, smooth: boolean) {
     edge.opposite.push(weld[z]); welded.set(key, edge);
   }
   const added = authored.size, total = count + added;
-  if (total > 300000 || mesh.indices.length * 4 > 1800000 || (mesh.morphTargets?.length ?? 0) * total * 3 > 2000000) throw new Error('Subdivision would exceed the mesh budget; subdivide fewer times or a smaller mesh');
+  // Every save parses, validates and re-serializes the whole document inside a 128 MB Worker, so one mesh stays well below the schema maximum.
+  if (total > MAX_SUBDIVIDED_VERTICES || mesh.indices.length * 4 > MAX_SUBDIVIDED_VERTICES * 6 || (mesh.morphTargets?.length ?? 0) * total * 3 > 2000000) throw new Error('Subdivision would exceed the mesh budget; subdivide fewer times or a smaller mesh');
   const at = (v: number, axis: number) => mesh.positions[v * 3 + axis];
   const moved = [...mesh.positions];
   if (smooth) {
@@ -78,6 +80,40 @@ function subdivideOnce(mesh: MeshData, smooth: boolean) {
   mesh.indices = indices;
   if (mesh.normals) mesh.normals = Array(total * 3).fill(0);
   if (mesh.tangents) mesh.tangents = Array(total * 4).fill(0);
+}
+
+/**
+ * Undo one subdivide step: each run of four child triangles collapses to its parent, whose corners are the
+ * original vertices kept at the front of every buffer. Sculpted positions of those corners are preserved.
+ */
+function unsubdivideOnce(mesh: MeshData) {
+  const children = mesh.indices;
+  if (children.length % 12) throw new Error('This mesh was not produced by subdivide');
+  const indices: number[] = [];
+  let count = 0;
+  for (let t = 0; t < children.length; t += 12) {
+    const [a, ab, ca, ab2, b, bc, ca2, bc2, c, ab3, bc3, ca3] = children.slice(t, t + 12);
+    if (ab !== ab2 || ab !== ab3 || bc !== bc2 || bc !== bc3 || ca !== ca2 || ca !== ca3) throw new Error('This mesh was not produced by subdivide');
+    indices.push(a, b, c);
+    count = Math.max(count, a + 1, b + 1, c + 1);
+  }
+  for (let t = 0; t < children.length; t += 12) if ([1, 5, 2].some(j => children[t + j] < count)) throw new Error('This mesh was not produced by subdivide');
+  const keep = (buffer: number[] | undefined, width: number) => buffer?.slice(0, count * width);
+  mesh.indices = indices;
+  mesh.positions = keep(mesh.positions, 3)!;
+  mesh.uv = keep(mesh.uv, 2);
+  mesh.colors = keep(mesh.colors, 3);
+  mesh.skinIndices = keep(mesh.skinIndices, 4);
+  mesh.skinWeights = keep(mesh.skinWeights, 4);
+  for (const target of mesh.morphTargets ?? []) target.positions = target.positions.slice(0, count * 3);
+  if (mesh.normals) mesh.normals = Array(count * 3).fill(0);
+  if (mesh.tangents) mesh.tangents = Array(count * 4).fill(0);
+}
+
+/** Coarsen a subdivided mesh back by the given number of steps, recomputing any stored shading. */
+export function unsubdivide(mesh: MeshData, iterations: number) {
+  for (let step = 0; step < iterations; step++) unsubdivideOnce(mesh);
+  refreshMeshShading(mesh, false, 'all');
 }
 
 /** Refine a mesh into four triangles per face per iteration; smooth applies Loop rules, otherwise the shape is kept. */
