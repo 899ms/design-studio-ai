@@ -543,9 +543,9 @@ export async function applySceneRequest(c:Context<Env>,projectId:string,input:z.
   if(receiptIdentity){const receipt=await readCreativeReceipt(c,projectId,receiptIdentity);if(receipt)return sceneResponse(receipt.revision,receipt.receiptDetails as ReturnType<typeof documentChanges>|undefined,documentSchema.parse(receipt.document));}
   const row=await projectRow(c,projectId);
   if(row.revision!==input.expectedRevision)fail(409,'conflict','Project revision changed. Read and reconcile before applying geometry.');
-  const before=documentSchema.parse(JSON.parse(row.document)),commands=[input.command].flat();let next=before;
-  // A batch saves once, so a large document is written a single time; any failing command rejects the whole batch.
-  for(const [index,command] of commands.entries()){try{next=mutateDocument(next,[{op:'scene-command',pageId:input.pageId,command}]);}catch(error){if(error instanceof z.ZodError)throw error;const message=error instanceof Error?error.message:'Scene command failed';fail(400,'invalid_scene_command',commands.length>1?`Command ${index+1}: ${message}`:message);throw error;}}
+  const before=documentSchema.parse(JSON.parse(row.document));let next:DesignDocument;
+  // A batch runs in one mutation, so the document is cloned, validated and saved once; any failing command rejects it all.
+  try{next=mutateDocument(before,[input.command].flat().map(command=>({op:'scene-command',pageId:input.pageId,command})));}catch(error){if(error instanceof z.ZodError)throw error;fail(400,'invalid_scene_command',error instanceof Error?error.message:'Scene command failed');throw error;}
   // Only summary responses use the change list; skipping it spares serializing large meshes twice.
   const changes=input.responseMode==='summary'?documentChanges(before,next):undefined,revision=input.preview?row.revision:(await saveDocument(c,row.id,next,input.expectedRevision,undefined,undefined,receiptIdentity,receiptIdentity&&changes)).revision;
   return sceneResponse(revision,changes,next);
